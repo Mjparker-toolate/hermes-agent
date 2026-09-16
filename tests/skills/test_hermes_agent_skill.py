@@ -2,11 +2,13 @@
 
 `website/` is never packaged, so an installed Hermes has no local copy of the
 user guide; skills ARE synced into `$HERMES_HOME/skills/`. The skill therefore
-does not try to restate the product — it routes to the published `llms.txt`,
-which is generated from the docs tree on every build and so can never be behind
-the feature set. These tests keep that routing honest: the index has to be where
-the skill says it is, and every reference has to be reachable, otherwise a
-shipped feature is invisible and the agent answers "Hermes can't do that."
+does not try to restate the product — it routes "can Hermes do X?" to the
+in-repo Features Overview (when the checkout is present) and to the published
+`llms.txt` (generated from the docs tree on every build, so it can never be
+behind the feature set). These tests keep that routing honest: the index has
+to be where the skill says it is, and every reference has to be reachable,
+otherwise a shipped feature is invisible and the agent answers "Hermes can't
+do that."
 """
 
 from __future__ import annotations
@@ -52,11 +54,14 @@ def test_every_reference_is_reachable_from_the_skill(skill_text):
     )
 
 
-def test_unknown_features_route_to_the_published_index(skill_text):
+def test_unknown_features_route_to_the_in_repo_catalog_and_published_index(skill_text):
     """The catch-all is what makes coverage of the whole product possible."""
+    overview = REPO / "website" / "docs" / "user-guide" / "features" / "overview.md"
+    assert "website/docs/user-guide/features/overview.md" in skill_text
+    assert overview.is_file(), "skill routes to a Features Overview that is not on disk"
     assert "/docs/llms.txt" in skill_text
     # web_extract can be disabled; terminal never is.
-    assert "curl" in skill_text, "no way to reach the index without web tools"
+    assert "curl" in skill_text, "no way to reach the published index without web tools"
 
 
 def test_the_index_is_published_where_the_skill_says_it_is(skill_text):

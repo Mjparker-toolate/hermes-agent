@@ -36,7 +36,8 @@ This skill is a concise operating guide, not the complete source of truth for ev
 
 Good verification targets, cheapest first:
 
-- **Every shipped feature, one line each: https://hermes-agent.nousresearch.com/docs/llms.txt.** Start here for any "can Hermes do X?" or "how do I do X?" — it indexes the entire documentation set with a link to the page that answers. It is generated from the docs tree on every build, so it is never behind the product. Fetch it with `web_extract`, or `curl -s https://hermes-agent.nousresearch.com/docs/llms.txt` when web tools are off. The whole documentation set in one file is at `/docs/llms-full.txt`.
+- **In-repo catalog of shipped features: `website/docs/user-guide/features/overview.md`.** Every Features doc is listed there once. Read it before answering "can Hermes do X?" from memory.
+- **Every docs page, one line each: https://hermes-agent.nousresearch.com/docs/llms.txt.** Start here when the overview is not enough — it indexes the entire documentation set (messaging platforms, CLI reference, developer internals) with a link to the page that answers. It is generated from the docs tree on every build, so it is never behind the product. Fetch it with `web_extract`, or `curl -s https://hermes-agent.nousresearch.com/docs/llms.txt` when web tools are off. The whole documentation set in one file is at `/docs/llms-full.txt`.
 - CLI commands: `hermes --help`, `hermes <command> --help`, and `hermes_cli/main.py`
 - Source tree: https://github.com/NousResearch/hermes-agent
 
@@ -88,7 +89,7 @@ Profiles use `~/.hermes/profiles/<name>/` with the same layout. When a profile i
 
 | User wants... | Load |
 |---|---|
-| **Anything not listed below — "can Hermes do X?", "how do I set up X?"** | **https://hermes-agent.nousresearch.com/docs/llms.txt** |
+| **Anything not listed below — "can Hermes do X?", "how do I set up X?"** | **`website/docs/user-guide/features/overview.md` (in-repo catalog of every Features page) then https://hermes-agent.nousresearch.com/docs/llms.txt** |
 | Bots that chat, run routines, or message each other; the Bots tab | docs: `/user-guide/bot-mode` |
 | CLI commands, subcommands, flags, "how do I run X" | `references/cli-reference.md` |
 | In-session slash commands | `references/slash-commands.md` |
@@ -111,8 +112,9 @@ Profiles use `~/.hermes/profiles/<name>/` with the same layout. When a profile i
 | Connecting a messaging platform (Telegram, Discord, Slack, WhatsApp, …) | docs: `/user-guide/messaging` |
 
 The reference list above is not the feature list — it is the set of topics that
-need more than their docs page. For everything else Hermes ships, fetch
-`llms.txt` and it maps the question to the page that answers it.
+need more than their docs page. For everything else Hermes ships, read
+`website/docs/user-guide/features/overview.md` first; fetch `llms.txt` when the
+question is outside Features (platforms, CLI flags, internals).
 
 Two theming rules that hold even without loading the reference: **you apply skins yourself** (`hermes config set display.skin <name>` — every surface repaints live within ~a second; don't tell the user to run `/skin`), and **to tweak one color, edit the ACTIVE skin** (`hermes skin set <key> <hex>`) — never fork `default`, which drops the palette and resets the background.
 
