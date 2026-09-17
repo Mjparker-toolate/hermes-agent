@@ -70,6 +70,7 @@ def test_health_does_not_require_auth(tmp_path, monkeypatch):
         assert status == 200
         assert payload["ok"] is True
         assert payload["service"] == "hermes-fleet"
+        assert payload["protocol"] == "n8n-agent-fleets"
     finally:
         _stop(server, thread)
 
@@ -252,3 +253,45 @@ def test_normalize_error_code_survives_http_envelope():
         from hermes_cli.fleet_schema import normalize_fleet_config
         normalize_fleet_config({"fleet_id": "x", "max_concurrency": 99})
     assert exc.value.code == "concurrency_cap"
+
+
+def test_n8n_start_and_delegate_round_trip(tmp_path, monkeypatch):
+    from hermes_cli.fleet_schema import combined_fleet_document
+
+    server, thread, base, token, _mgr = _start(tmp_path, monkeypatch)
+    try:
+        status, started = _call(
+            base, "POST", "/fleet/start", token, combined_fleet_document(),
+        )
+        assert status == 201
+        assert started["fleet_id"] == "hermes-clawhub-combined"
+        assert started["live_workers"] == 3
+        assert {w["agent_id"] for w in started["workers"]} >= {
+            "orchestrator", "clawhub-skill-runner", "cursor-cloud-delegate",
+        }
+
+        status, delegated = _call(
+            base, "POST", "/fleet/hermes-clawhub-combined/delegate", token,
+            {
+                "instruction": "search for yaml skills",
+                "nodeId": "fan-out-1",
+                "agentId": "clawhub-skill-runner",
+                "kind": "clawhub-search",
+            },
+        )
+        assert status == 200
+        assert delegated["status"] == "ok"
+        assert delegated["nodeId"] == "fan-out-1"
+        assert delegated["agentId"] == "clawhub-skill-runner"
+
+        status, conflict = _call(
+            base, "POST", "/fleet/hermes-clawhub-combined/delegate", token,
+            {
+                "instruction": "install and run",
+                "tools": ["clawhub:clawhub-install", "clawhub:clawhub-run"],
+            },
+        )
+        assert status == 409
+        assert conflict["code"] == "install_run_same_turn"
+    finally:
+        _stop(server, thread)

@@ -32,12 +32,23 @@ def build_fleet_parser(subparsers, *, cmd_fleet: Callable) -> None:
     stop = fleet_sub.add_parser("stop", help="Drain and stop every worker in a fleet")
     stop.add_argument("fleet_id", help="Fleet id")
 
+    delegate = fleet_sub.add_parser(
+        "delegate",
+        help="Hand one n8n specialist turn to a running fleet (concurrency-capped)",
+    )
+    delegate.add_argument("fleet_id", help="Fleet id")
+    delegate.add_argument("--instruction", default="", help="Task text (or stdin). Never pass secrets here.")
+    delegate.add_argument("--agent-id", default="", dest="agent_id", help="n8n member agentId")
+    delegate.add_argument("--node-id", default="", dest="node_id", help="n8n node id")
+    delegate.add_argument("--kind", default="", help="clawhub-search|clawhub-install|clawhub-run|cursor-cloud")
+    delegate.add_argument("--tools", default="", help="Comma-separated tool ids for this turn")
+
     fleet_sub.add_parser("list", aliases=["ls"], help="List known fleets")
 
     serve = fleet_sub.add_parser(
         "serve",
         help="Serve the loopback fleet HTTP API",
-        description="Bind 127.0.0.1 and expose POST /fleet/start, GET /fleet/{id}, POST /fleet/{id}/scale, POST /fleet/{id}/stop.",
+        description="Bind 127.0.0.1 and expose POST /fleet/start, GET /fleet/{id}, POST /fleet/{id}/scale, POST /fleet/{id}/stop, POST /fleet/{id}/delegate.",
     )
     serve.add_argument("--host", default="127.0.0.1", help="Bind host (loopback only in v1)")
     serve.add_argument("--port", type=int, default=8755, help="Bind port (default 8755)")

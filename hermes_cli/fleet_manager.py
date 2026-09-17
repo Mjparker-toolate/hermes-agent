@@ -19,10 +19,14 @@ import uuid
 from typing import Any, Callable, Mapping, Optional
 
 from hermes_cli.fleet_schema import (
+    CURSOR_CLOUD_TOOL_ID,
     LIVE_WORKER_STATUSES,
     V1_MAX_CONCURRENCY,
     FleetConfigError,
+    install_and_run_conflict,
     normalize_fleet_config,
+    parse_delegate_request,
+    tool_kind,
 )
 from hermes_cli.fleet_store import list_fleet_ids, load_fleet, save_fleet
 
@@ -234,6 +238,7 @@ class FleetManager:
                 "status": "running",
                 "config": config,
                 "workers": [],
+                "inflight": 0,
                 "created_at": self._clock(),
                 "updated_at": self._clock(),
             }
@@ -281,8 +286,73 @@ class FleetManager:
             self._scale_locked(record, 0, drain=drain)
             record["status"] = "stopped"
             record["config"]["replicas"] = 0
+            record["inflight"] = 0
             self._persist(record, event="stopped")
             return self._public(record)
+
+    def delegate(self, fleet_id: str, request: Mapping[str, Any]) -> dict[str, Any]:
+        """Accept one n8n specialist turn. Caps inflight; never evals skill text."""
+        try:
+            parsed = parse_delegate_request(request)
+        except FleetConfigError as exc:
+            if getattr(exc, "code", "") == "install_run_same_turn":
+                raise FleetError(str(exc), code="install_run_same_turn", status=409) from exc
+            raise
+        tools = list(parsed["tools"])
+        with self._lock:
+            record = self._require(fleet_id)
+            if record.get("status") != "running":
+                raise FleetError(
+                    f"Fleet {fleet_id!r} is not running.",
+                    code="not_running",
+                    status=409,
+                )
+            if record.get("config", {}).get("kill_switch"):
+                raise FleetKillSwitchError(fleet_id)
+            worker = self._pick_delegate_worker(record, parsed["agent_id"])
+            worker_tools = list(worker.get("tools") or []) if worker else []
+            effective_tools = tools or worker_tools
+            if install_and_run_conflict(effective_tools) and tools:
+                raise FleetError(
+                    "Refusing install and run in the same turn; install first, run later.",
+                    code="install_run_same_turn",
+                    status=409,
+                )
+            cap = min(int(record["config"]["max_concurrency"]), V1_MAX_CONCURRENCY)
+            inflight = int(record.get("inflight") or 0)
+            if inflight >= cap:
+                raise FleetConcurrencyError(fleet_id, inflight + 1, cap)
+            record["inflight"] = inflight + 1
+            if worker and worker.get("status") == "idle":
+                worker["status"] = "running"
+                worker["updated_at"] = self._clock()
+            self._persist(record, event=None)
+            worker_snapshot = dict(worker) if worker else {}
+
+        try:
+            result = self._execute_delegate(parsed, worker_snapshot, fleet_id)
+        except Exception as exc:
+            result = {
+                "status": "failed",
+                "output": "",
+                "error": str(exc) or "delegate_failed",
+                "nodeId": parsed["node_id"],
+                "agentId": parsed["agent_id"] or worker_snapshot.get("agent_id") or "",
+                "fleet_id": fleet_id,
+                "worker_id": worker_snapshot.get("worker_id") or "",
+                "kind": parsed["kind"],
+            }
+        finally:
+            with self._lock:
+                record = self._require(fleet_id)
+                record["inflight"] = max(0, int(record.get("inflight") or 0) - 1)
+                if worker_snapshot.get("worker_id"):
+                    live = self._find_worker(record, str(worker_snapshot["worker_id"]))
+                    if live and live.get("status") == "running" and not live.get("subagent_handle"):
+                        live["status"] = "idle"
+                        live["updated_at"] = self._clock()
+                self._persist(record, event=None)
+        return result
 
     def set_kill_switch(self, fleet_id: str, enabled: bool) -> dict[str, Any]:
         with self._lock:
@@ -325,13 +395,78 @@ class FleetManager:
         for worker in extras:
             self._stop_worker_locked(record, worker, reason="fleet_drain" if drain else "fleet_stop")
 
+    def _next_member(self, record: Mapping[str, Any]) -> dict[str, Any] | None:
+        members = list((record.get("config") or {}).get("members") or [])
+        live_ids = {
+            str(worker.get("agent_id") or "")
+            for worker in _live_workers(record)
+            if worker.get("agent_id")
+        }
+        for member in members:
+            agent_id = str(member.get("agent_id") or "")
+            if agent_id and agent_id not in live_ids:
+                return dict(member)
+        return None
+
+    def _pick_delegate_worker(self, record: Mapping[str, Any], agent_id: str) -> dict[str, Any] | None:
+        wanted = (agent_id or "").strip()
+        live = _live_workers(record)
+        if wanted:
+            for worker in live:
+                if str(worker.get("agent_id") or "") == wanted:
+                    return worker
+        for worker in live:
+            if worker.get("status") == "idle":
+                return worker
+        return live[0] if live else None
+
+    def _execute_delegate(
+        self,
+        parsed: Mapping[str, Any],
+        worker: Mapping[str, Any],
+        fleet_id: str,
+    ) -> dict[str, Any]:
+        """Record the turn. Never eval SKILL.md; never call Cursor cloud."""
+        kind = str(parsed.get("kind") or "")
+        agent_id = str(parsed.get("agent_id") or worker.get("agent_id") or "")
+        node_id = str(parsed.get("node_id") or "")
+        worker_id = str(worker.get("worker_id") or "")
+        if kind == CURSOR_CLOUD_TOOL_ID or tool_kind(kind) == "cursor-cloud":
+            output = (
+                f"accepted cursor-cloud turn for {agent_id or worker_id} "
+                "(not executed; Cloud lane owns Cursor API calls)."
+            )
+        else:
+            output = (
+                f"recorded {kind or 'fleet-delegate'} for {agent_id or worker_id}; "
+                "ClawHub skill text is untrusted and was not evaluated."
+            )
+        return {
+            "status": "ok",
+            "output": output,
+            "error": None,
+            "nodeId": node_id,
+            "agentId": agent_id,
+            "fleet_id": fleet_id,
+            "worker_id": worker_id,
+            "kind": kind,
+        }
+
     def _spawn_worker_locked(self, record: dict[str, Any]) -> dict[str, Any]:
         config = record["config"]
         fleet_id = record["fleet_id"]
         index = len(record["workers"]) + 1
         worker_id = _new_worker_id(index)
         session_id = _new_session_id(fleet_id, worker_id)
-        template = config.get("worker_template") or {}
+        template = dict(config.get("worker_template") or {})
+        member = self._next_member(record)
+        agent_id = ""
+        if member:
+            agent_id = str(member.get("agent_id") or "")
+            if member.get("tools"):
+                template["tools"] = list(member["tools"])
+            if member.get("role"):
+                template["role"] = member["role"]
         model = str(template.get("model") or "")
         self._sessions.create(
             session_id, model=model, fleet_id=fleet_id, worker_id=worker_id,
@@ -340,6 +475,9 @@ class FleetManager:
             "worker_id": worker_id,
             "fleet_id": fleet_id,
             "session_id": session_id,
+            "agent_id": agent_id,
+            "role": str(template.get("role") or "leaf"),
+            "tools": list(template.get("tools") or []),
             "status": "idle",
             "attempts": 0,
             "next_retry_at": None,
@@ -429,22 +567,29 @@ class FleetManager:
 
     def _public(self, record: Mapping[str, Any]) -> dict[str, Any]:
         workers = list(record.get("workers") or [])
+        config = record.get("config") or {}
         return {
             "fleet_id": record.get("fleet_id"),
             "status": record.get("status"),
-            "kill_switch": bool((record.get("config") or {}).get("kill_switch")),
-            "max_concurrency": (record.get("config") or {}).get("max_concurrency"),
-            "replicas": (record.get("config") or {}).get("replicas"),
+            "kill_switch": bool(config.get("kill_switch")),
+            "max_concurrency": config.get("max_concurrency"),
+            "replicas": config.get("replicas"),
             "live_workers": len(_live_workers(record)),
-            "webhook_callback_url": (record.get("config") or {}).get("webhook_callback_url") or "",
-            "secrets_ref": list((record.get("config") or {}).get("secrets_ref") or []),
-            "worker_template": dict((record.get("config") or {}).get("worker_template") or {}),
-            "backoff": dict((record.get("config") or {}).get("backoff") or {}),
-            "retry": dict((record.get("config") or {}).get("retry") or {}),
+            "inflight": int(record.get("inflight") or 0),
+            "coordinator_agent_id": config.get("coordinator_agent_id") or "",
+            "members": [dict(m) for m in (config.get("members") or [])],
+            "webhook_callback_url": config.get("webhook_callback_url") or "",
+            "secrets_ref": list(config.get("secrets_ref") or []),
+            "worker_template": dict(config.get("worker_template") or {}),
+            "backoff": dict(config.get("backoff") or {}),
+            "retry": dict(config.get("retry") or {}),
             "workers": [
                 {
                     "worker_id": w.get("worker_id"),
                     "session_id": w.get("session_id"),
+                    "agent_id": w.get("agent_id") or "",
+                    "role": w.get("role") or "",
+                    "tools": list(w.get("tools") or []),
                     "status": w.get("status"),
                     "attempts": w.get("attempts") or 0,
                     "error": w.get("error"),

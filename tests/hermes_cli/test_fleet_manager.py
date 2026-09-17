@@ -234,3 +234,73 @@ def test_session_backend_creates_fleet_source_rows(tmp_path, monkeypatch):
         assert ended["ended_at"] is not None
     finally:
         db.close()
+
+
+def test_members_tag_spawned_workers(tmp_path, monkeypatch):
+    from hermes_cli.fleet_schema import combined_fleet_document
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    mgr = _manager()
+    status = mgr.start(combined_fleet_document())
+    assert status["fleet_id"] == "hermes-clawhub-combined"
+    assert status["live_workers"] == 3
+    ids = [w["agent_id"] for w in status["workers"]]
+    assert ids == ["orchestrator", "clawhub-skill-runner", "cursor-cloud-delegate"]
+    assert status["coordinator_agent_id"] == "orchestrator"
+
+
+def test_delegate_records_turn_and_releases_inflight(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    mgr = _manager()
+    mgr.start(_start_doc(replicas=1))
+    result = mgr.delegate("alpha", {
+        "instruction": "search yaml skills",
+        "nodeId": "node-1",
+        "agentId": "",
+        "kind": "clawhub-search",
+    })
+    assert result["status"] == "ok"
+    assert result["nodeId"] == "node-1"
+    assert "untrusted" in result["output"]
+    assert mgr.get("alpha")["inflight"] == 0
+    assert mgr.get("alpha")["workers"][0]["status"] == "idle"
+
+
+def test_delegate_cursor_cloud_is_recorded_not_executed(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    mgr = _manager()
+    mgr.start(_start_doc(replicas=1))
+    result = mgr.delegate("alpha", {
+        "instruction": "open a cloud agent",
+        "kind": "cursor-cloud",
+        "tools": ["cursor-cloud"],
+    })
+    assert result["status"] == "ok"
+    assert "not executed" in result["output"]
+
+
+def test_delegate_install_and_run_same_turn_conflicts(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    mgr = _manager()
+    mgr.start(_start_doc(replicas=1))
+    with pytest.raises(FleetError) as exc:
+        mgr.delegate("alpha", {
+            "instruction": "install then run",
+            "tools": ["clawhub:clawhub-install", "clawhub:clawhub-run"],
+        })
+    assert exc.value.code == "install_run_same_turn"
+    assert exc.value.status == 409
+    assert mgr.get("alpha")["inflight"] == 0
+
+
+def test_delegate_inflight_respects_max_concurrency(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    mgr = _manager()
+    mgr.start(_start_doc(max_concurrency=1, replicas=1))
+    record = load_fleet("alpha")
+    assert record is not None
+    record["inflight"] = 1
+    save_fleet(record)
+    with pytest.raises(FleetConcurrencyError):
+        mgr.delegate("alpha", {"instruction": "overflow"})
+    assert load_fleet("alpha")["inflight"] == 1

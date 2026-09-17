@@ -127,3 +127,79 @@ def test_unknown_keys_and_invalid_role_are_rejected():
 def test_retry_max_attempts_zero_is_valid():
     normalized = normalize_fleet_config(_doc(retry={"max_attempts": 0}))
     assert normalized["retry"]["max_attempts"] == 0
+
+
+def test_n8n_camelcase_members_document_coerces_and_caps_replicas():
+    from hermes_cli.fleet_schema import (
+        COMBINED_FLEET_ID,
+        combined_fleet_document,
+        install_and_run_conflict,
+    )
+
+    normalized = normalize_fleet_config(combined_fleet_document())
+    assert normalized["fleet_id"] == COMBINED_FLEET_ID
+    assert normalized["max_concurrency"] == 3
+    assert normalized["replicas"] == 3
+    assert normalized["coordinator_agent_id"] == "orchestrator"
+    roles = {m["agent_id"]: m["role"] for m in normalized["members"]}
+    assert roles["orchestrator"] == "orchestrator"
+    assert roles["clawhub-skill-runner"] == "leaf"
+    assert roles["cursor-cloud-delegate"] == "leaf"
+    cloud = next(m for m in normalized["members"] if m["agent_id"] == "cursor-cloud-delegate")
+    assert cloud["tools"] == ["cursor-cloud"]
+    runner = next(m for m in normalized["members"] if m["agent_id"] == "clawhub-skill-runner")
+    assert install_and_run_conflict(runner["tools"])  # catalog may list both; one turn must not
+
+
+def test_members_above_cap_are_stored_but_replicas_fit_the_cap():
+    doc = {
+        "fleetId": "wide",
+        "maxConcurrency": 2,
+        "members": ["orchestrator", "a", "b", "c"],
+    }
+    normalized = normalize_fleet_config(doc)
+    assert len(normalized["members"]) == 4
+    assert normalized["replicas"] == 2
+    assert normalized["replicas"] <= normalized["max_concurrency"]
+
+
+def test_n8n_task_graph_keys_are_ignored():
+    normalized = normalize_fleet_config({
+        "fleetId": "graph-side",
+        "maxConcurrency": 2,
+        "members": [{"agentId": "orchestrator", "role": "coordinator"}],
+        "taskGraph": {"fanOut": True, "fanIn": True},
+        "fanOut": ["a"],
+    })
+    assert normalized["fleet_id"] == "graph-side"
+    assert normalized["replicas"] == 1
+
+
+def test_coordinator_alias_on_worker_template_maps_to_orchestrator():
+    normalized = normalize_fleet_config(_doc(worker_template={"role": "coordinator"}))
+    assert normalized["worker_template"]["role"] == "orchestrator"
+
+
+def test_parse_delegate_refuses_install_and_run_same_turn():
+    from hermes_cli.fleet_schema import parse_delegate_request
+
+    with pytest.raises(FleetConfigError) as exc:
+        parse_delegate_request({
+            "instruction": "do both",
+            "tools": ["clawhub:clawhub-install", "clawhub:clawhub-run"],
+        })
+    assert exc.value.code == "install_run_same_turn"
+
+
+def test_parse_delegate_accepts_camelcase_ids():
+    from hermes_cli.fleet_schema import parse_delegate_request
+
+    parsed = parse_delegate_request({
+        "instruction": "search yaml",
+        "nodeId": "n1",
+        "agentId": "clawhub-skill-runner",
+        "kind": "clawhub-search",
+    })
+    assert parsed["node_id"] == "n1"
+    assert parsed["agent_id"] == "clawhub-skill-runner"
+    assert parsed["kind"] == "clawhub-search"

@@ -46,13 +46,14 @@ def fleet_command(args: Namespace) -> int:
         "status": _cmd_status,
         "scale": _cmd_scale,
         "stop": _cmd_stop,
+        "delegate": _cmd_delegate,
         "list": _cmd_list,
         "ls": _cmd_list,
         "serve": _cmd_serve,
     }
     handler = handlers.get(action)
     if handler is None:
-        print("Usage: hermes fleet {start|status|scale|stop|list|serve}")
+        print("Usage: hermes fleet {start|status|scale|stop|delegate|list|serve}")
         print("Run 'hermes fleet --help' for details.")
         return 1
     try:
@@ -95,6 +96,22 @@ def _cmd_stop(args: Namespace) -> int:
     return 0
 
 
+def _cmd_delegate(args: Namespace) -> int:
+    instruction = getattr(args, "instruction", None) or ""
+    if not instruction.strip() and not sys.stdin.isatty():
+        instruction = sys.stdin.read()
+    tools_raw = getattr(args, "tools", None) or ""
+    tools = [part.strip() for part in tools_raw.split(",") if part.strip()]
+    _print_json(_manager().delegate(args.fleet_id, {
+        "instruction": instruction,
+        "agent_id": getattr(args, "agent_id", None) or "",
+        "node_id": getattr(args, "node_id", None) or "",
+        "kind": getattr(args, "kind", None) or "",
+        "tools": tools,
+    }))
+    return 0
+
+
 def _cmd_list(args: Namespace) -> int:
     _print_json(_manager().list())
     return 0
@@ -106,7 +123,7 @@ def _cmd_serve(args: Namespace) -> int:
 
     def _ready(bound_host: str, bound_port: int) -> None:
         print(f"Hermes fleet HTTP listening on http://{bound_host}:{bound_port}")
-        print("Routes: POST /fleet/start  GET /fleet/{{id}}  POST /fleet/{{id}}/scale  POST /fleet/{{id}}/stop")
+        print("Routes: POST /fleet/start  GET /fleet/{{id}}  POST /fleet/{{id}}/scale  POST /fleet/{{id}}/stop  POST /fleet/{{id}}/delegate")
         print(f"Auth:   Authorization: Bearer <token>  (token file: {token_file_display()})")
         print("Bind is loopback-only in v1. State: " + f"{display_hermes_home()}/fleets/")
         sys.stdout.flush()

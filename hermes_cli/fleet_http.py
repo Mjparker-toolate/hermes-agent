@@ -1,4 +1,4 @@
-"""Loopback-only HTTP surface for fleet start/status/scale/stop.
+"""Loopback-only HTTP surface for fleet start/status/scale/stop/delegate.
 
 n8n (or a ClawHub-installed skill) calls this local server. v1 binds
 127.0.0.1 / ::1 only and requires a bearer token stored under
@@ -21,7 +21,12 @@ from hermes_cli.fleet_manager import (
     FleetManager,
     default_manager,
 )
-from hermes_cli.fleet_schema import FleetConfigError, is_loopback_host, is_loopback_url
+from hermes_cli.fleet_schema import (
+    N8N_AGENT_FLEETS_PROTOCOL,
+    FleetConfigError,
+    is_loopback_host,
+    is_loopback_url,
+)
 from hermes_cli.fleet_store import fleets_dir
 from hermes_constants import display_hermes_home
 
@@ -113,7 +118,7 @@ def _parse_path(path: str) -> tuple[str, str | None, str | None]:
         return "start", None, None
     if len(parts) == 2:
         return "status", parts[1], None
-    if len(parts) == 3 and parts[2] in {"scale", "stop"}:
+    if len(parts) == 3 and parts[2] in {"scale", "stop", "delegate"}:
         return parts[2], parts[1], None
     return "unknown", None, None
 
@@ -170,7 +175,11 @@ def make_handler(manager: FleetManager, token: str) -> type[BaseHTTPRequestHandl
             try:
                 action, fleet_id, _extra = _parse_path(self.path)
                 if action == "health":
-                    self._send(200, {"ok": True, "service": "hermes-fleet"})
+                    self._send(200, {
+                        "ok": True,
+                        "service": "hermes-fleet",
+                        "protocol": N8N_AGENT_FLEETS_PROTOCOL,
+                    })
                     return
                 self._check_auth()
                 if action == "start" and method == "POST":
@@ -189,6 +198,9 @@ def make_handler(manager: FleetManager, token: str) -> type[BaseHTTPRequestHandl
                     return
                 if action == "stop" and method == "POST" and fleet_id:
                     self._send(200, manager.stop(fleet_id))
+                    return
+                if action == "delegate" and method == "POST" and fleet_id:
+                    self._send(200, manager.delegate(fleet_id, self._read_json()))
                     return
                 raise FleetHttpError(404, f"No route for {method} {self.path}", code="not_found")
             except FleetConfigError as exc:

@@ -12,6 +12,7 @@ REPO = Path(__file__).resolve().parents[2]
 SKILL_DIR = REPO / "skills" / "autonomous-ai-agents" / "hermes-fleet"
 SKILL_MD = SKILL_DIR / "SKILL.md"
 EXAMPLE = SKILL_DIR / "templates" / "fleet.example.yaml"
+COMBINED = SKILL_DIR / "templates" / "hermes-clawhub-combined.yaml"
 CLIENT = SKILL_DIR / "scripts" / "fleet_client.py"
 
 
@@ -44,6 +45,7 @@ def test_skill_points_agents_at_native_tools_and_the_http_surface():
         "GET /fleet/{id}",
         "POST /fleet/{id}/scale",
         "POST /fleet/{id}/stop",
+        "POST /fleet/{id}/delegate",
     ):
         assert route in text
     assert "127.0.0.1" in text
@@ -52,8 +54,23 @@ def test_skill_points_agents_at_native_tools_and_the_http_surface():
     relative = "templates/fleet.example.yaml"
     assert relative in text
     assert (SKILL_DIR / relative).is_file()
+    assert "templates/hermes-clawhub-combined.yaml" in text
+    assert COMBINED.is_file()
     assert "scripts/fleet_client.py" in text
     assert CLIENT.is_file()
+    assert "n8n-agent-fleets" in text
+
+
+def test_combined_yaml_is_the_n8n_sample_contract():
+    text = COMBINED.read_text(encoding="utf-8")
+    config = load_fleet_document(text, source=str(COMBINED))
+    assert config["fleet_id"] == "hermes-clawhub-combined"
+    assert config["max_concurrency"] <= V1_MAX_CONCURRENCY
+    assert {m["agent_id"] for m in config["members"]} == {
+        "orchestrator", "clawhub-skill-runner", "cursor-cloud-delegate",
+    }
+    assert "sk-" not in text
+    assert not any("=" in name for name in config["secrets_ref"])
 
 
 def test_client_refuses_to_run_without_a_token(monkeypatch, capsys):

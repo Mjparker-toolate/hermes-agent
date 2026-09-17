@@ -4,6 +4,10 @@ A fleet document is YAML or JSON. Secrets are **names only** (``secrets_ref``);
 values never belong in the document. v1 hard-caps ``max_concurrency`` at 5 and
 refuses non-loopback callback URLs so a local n8n/ClawHub caller cannot fan
 out to paid cloud or an open SSRF sink.
+
+n8n agent-fleets documents (camelCase ``fleetId`` + ``members``) are coerced
+into this canonical snake_case shape. Hermes does **not** run n8n's task
+graph; it stores members and caps worker / delegate concurrency.
 """
 
 from __future__ import annotations
@@ -17,8 +21,14 @@ from urllib.parse import urlparse
 
 V1_MAX_CONCURRENCY = 5
 DEFAULT_MAX_CONCURRENCY = 5
+FLEET_MAX_MEMBERS = 50
+FLEET_INSTRUCTION_MAX_LENGTH = 10000
 FLEET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SECRET_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
+N8N_AGENT_FLEETS_PROTOCOL = "n8n-agent-fleets"
+COMBINED_FLEET_ID = "hermes-clawhub-combined"
+CLAWHUB_TOOL_PREFIX = "clawhub:"
+CURSOR_CLOUD_TOOL_ID = "cursor-cloud"
 _EMBEDDED_SECRET_KEYS = frozenset({
     "secret", "token", "password", "api_key", "apikey", "authorization",
     "access_token", "private_key", "client_secret",
@@ -47,6 +57,58 @@ DEFAULT_BACKOFF = {
 DEFAULT_RETRY = {
     "max_attempts": 2,
 }
+
+DEFAULT_MEMBER = {
+    "agent_id": "",
+    "role": "leaf",
+    "tools": [],
+    "memory_scope": "",
+    "lifecycle": "",
+}
+
+_ROLE_ALIASES = {
+    "leaf": "leaf",
+    "specialist": "leaf",
+    "orchestrator": "orchestrator",
+    "coordinator": "orchestrator",
+}
+
+_TOP_ALIASES = {
+    "fleetId": "fleet_id",
+    "maxConcurrency": "max_concurrency",
+    "workerTemplate": "worker_template",
+    "webhookCallbackUrl": "webhook_callback_url",
+    "secretsRef": "secrets_ref",
+    "killSwitch": "kill_switch",
+    "coordinatorAgentId": "coordinator_agent_id",
+}
+
+_MEMBER_ALIASES = {
+    "agentId": "agent_id",
+    "memoryScope": "memory_scope",
+}
+
+_BACKOFF_ALIASES = {
+    "initialSeconds": "initial_seconds",
+    "maxSeconds": "max_seconds",
+}
+
+_RETRY_ALIASES = {
+    "maxAttempts": "max_attempts",
+}
+
+# n8n owns the fan-out/fan-in graph; extra keys must not fail Hermes start.
+_N8N_IGNORED_KEYS = frozenset({
+    "name", "description", "version", "enabled", "graph", "taskGraph",
+    "task_graph", "tasks", "edges", "nodes", "projectId", "project_id",
+    "coordinator", "metadata", "fanOut", "fanIn", "fan_out", "fan_in",
+})
+
+_KNOWN_CONFIG_KEYS = frozenset({
+    "fleet_id", "max_concurrency", "worker_template", "webhook_callback_url",
+    "secrets_ref", "backoff", "retry", "kill_switch", "replicas",
+    "members", "coordinator_agent_id",
+})
 
 
 class FleetConfigError(ValueError):
@@ -120,6 +182,56 @@ def _positive_number(value: Any, label: str, *, default: float, minimum: float =
     return number
 
 
+def _apply_aliases(data: dict[str, Any], aliases: Mapping[str, str], *, label: str) -> dict[str, Any]:
+    out = dict(data)
+    for src, dest in aliases.items():
+        if src not in out:
+            continue
+        if dest in out and out[dest] != out[src]:
+            raise FleetConfigError(f"{label} has conflicting {src} and {dest}.")
+        out[dest] = out.pop(src)
+    return out
+
+
+def _normalize_role(raw: str, *, label: str) -> str:
+    role = (raw or "leaf").strip().lower()
+    mapped = _ROLE_ALIASES.get(role)
+    if mapped is None:
+        raise FleetConfigError(
+            f"{label} must be one of {sorted(_ROLE_ALIASES)} (coordinator/orchestrator, specialist/leaf)."
+        )
+    return mapped
+
+
+def _tool_slug(tool: str) -> str:
+    text = (tool or "").strip().lower()
+    if text.startswith(CLAWHUB_TOOL_PREFIX):
+        text = text[len(CLAWHUB_TOOL_PREFIX):]
+    return text
+
+
+def tool_kind(tool: str) -> str:
+    """Classify a member/delegate tool id (clawhub install/run, cursor-cloud, other)."""
+    slug = _tool_slug(tool)
+    if slug in {CURSOR_CLOUD_TOOL_ID, "cursor-cloud-delegate"}:
+        return "cursor-cloud"
+    if slug in {"clawhub-install", "install"} or slug.endswith("-install") or slug.endswith("/install"):
+        return "install"
+    if slug in {"clawhub-run", "run"} or slug.endswith("-run") or slug.endswith("/run"):
+        return "run"
+    if slug in {"clawhub-search", "search"} or slug.endswith("-search"):
+        return "search"
+    if slug in {"fleet-delegate", "hermes-learn"}:
+        return slug
+    return "other"
+
+
+def install_and_run_conflict(tools: list[str] | None) -> bool:
+    """True when one turn lists both a ClawHub install tool and a run tool."""
+    kinds = {tool_kind(item) for item in (tools or []) if item}
+    return "install" in kinds and "run" in kinds
+
+
 def _forbid_embedded_secrets(document: Mapping[str, Any], *, path: str = "") -> None:
     """Reject credential values anywhere except ``secrets_ref`` names."""
     for key, value in document.items():
@@ -144,6 +256,90 @@ def _forbid_embedded_secrets(document: Mapping[str, Any], *, path: str = "") -> 
                     _forbid_embedded_secrets(item, path=f"{here}[{index}]")
 
 
+def coerce_orchestrator_document(document: Mapping[str, Any]) -> dict[str, Any]:
+    """Fold n8n camelCase / members into canonical Hermes fleet keys."""
+    data = _apply_aliases(dict(document), _TOP_ALIASES, label="fleet config")
+    for ignored in list(data):
+        if ignored in _N8N_IGNORED_KEYS:
+            data.pop(ignored)
+
+    template = data.get("worker_template")
+    if isinstance(template, Mapping):
+        data["worker_template"] = _apply_aliases(dict(template), {}, label="worker_template")
+
+    backoff = data.get("backoff")
+    if isinstance(backoff, Mapping):
+        data["backoff"] = _apply_aliases(dict(backoff), _BACKOFF_ALIASES, label="backoff")
+
+    retry = data.get("retry")
+    if isinstance(retry, Mapping):
+        data["retry"] = _apply_aliases(dict(retry), _RETRY_ALIASES, label="retry")
+
+    members = data.get("members")
+    if members is not None:
+        data["members"] = _coerce_members(members)
+    return data
+
+
+def _default_tools_for_agent(agent_id: str) -> list[str]:
+    slug = agent_id.strip().lower()
+    if slug in {CURSOR_CLOUD_TOOL_ID, "cursor-cloud-delegate"}:
+        return [CURSOR_CLOUD_TOOL_ID]
+    if "clawhub" in slug:
+        return [
+            f"{CLAWHUB_TOOL_PREFIX}clawhub-search",
+            f"{CLAWHUB_TOOL_PREFIX}clawhub-install",
+            f"{CLAWHUB_TOOL_PREFIX}clawhub-run",
+        ]
+    return []
+
+
+def _coerce_members(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        raise FleetConfigError("members must be a list.")
+    if len(raw) > FLEET_MAX_MEMBERS:
+        raise FleetConfigError(
+            f"members cannot exceed {FLEET_MAX_MEMBERS}.",
+            code="invalid_config",
+        )
+    members: list[dict[str, Any]] = []
+    for index, item in enumerate(raw):
+        if isinstance(item, str):
+            agent_id = item.strip()
+            if not agent_id:
+                raise FleetConfigError(f"members[{index}] must be a non-empty agent id.")
+            role = "orchestrator" if index == 0 or agent_id.lower() in {
+                "orchestrator", "coordinator",
+            } else "leaf"
+            members.append({
+                "agent_id": agent_id,
+                "role": role,
+                "tools": _default_tools_for_agent(agent_id),
+                "memory_scope": "fleet",
+                "lifecycle": "persistent" if role == "orchestrator" else "task",
+            })
+            continue
+        data = _apply_aliases(_require_mapping(item, f"members[{index}]"), _MEMBER_ALIASES, label=f"members[{index}]")
+        agent_id = _optional_str(data.get("agent_id"), f"members[{index}].agent_id", allow_empty=False)
+        role = _normalize_role(
+            _optional_str(data.get("role"), f"members[{index}].role") or (
+                "orchestrator" if index == 0 else "leaf"
+            ),
+            label=f"members[{index}].role",
+        )
+        tools = _string_list(data.get("tools"), f"members[{index}].tools")
+        members.append({
+            "agent_id": agent_id,
+            "role": role,
+            "tools": tools,
+            "memory_scope": _optional_str(data.get("memory_scope"), f"members[{index}].memory_scope") or "fleet",
+            "lifecycle": _optional_str(data.get("lifecycle"), f"members[{index}].lifecycle") or (
+                "persistent" if role == "orchestrator" else "task"
+            ),
+        })
+    return members
+
+
 def _worker_template(raw: Any) -> dict[str, Any]:
     template = dict(DEFAULT_WORKER_TEMPLATE)
     if raw is None:
@@ -158,10 +354,8 @@ def _worker_template(raw: Any) -> dict[str, Any]:
     template["provider"] = _optional_str(data.get("provider"), "worker_template.provider")
     template["tools"] = _string_list(data.get("tools"), "worker_template.tools")
     template["skills"] = _string_list(data.get("skills"), "worker_template.skills")
-    role = _optional_str(data.get("role"), "worker_template.role") or "leaf"
-    if role not in {"leaf", "orchestrator"}:
-        raise FleetConfigError("worker_template.role must be 'leaf' or 'orchestrator'.")
-    template["role"] = role
+    role_raw = _optional_str(data.get("role"), "worker_template.role") or "leaf"
+    template["role"] = _normalize_role(role_raw, label="worker_template.role")
     template["goal"] = _optional_str(data.get("goal"), "worker_template.goal")
     return template
 
@@ -235,15 +429,60 @@ def _max_concurrency(raw: Any) -> int:
     return raw
 
 
+def parse_delegate_request(document: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize a POST /fleet/{{id}}/delegate body (snake or camelCase)."""
+    data = _require_mapping(document, "delegate request")
+    _forbid_embedded_secrets(data)
+    instruction = data.get("instruction")
+    if instruction is None:
+        instruction = data.get("FLEET_INSTRUCTION")
+    instruction = _optional_str(instruction, "instruction", allow_empty=False)
+    if len(instruction) > FLEET_INSTRUCTION_MAX_LENGTH:
+        raise FleetConfigError(
+            f"instruction exceeds {FLEET_INSTRUCTION_MAX_LENGTH} characters.",
+            code="invalid_config",
+        )
+    node_id = _optional_str(
+        data.get("node_id", data.get("nodeId", data.get("FLEET_NODE_ID"))),
+        "node_id",
+    )
+    agent_id = _optional_str(
+        data.get("agent_id", data.get("agentId", data.get("FLEET_AGENT_ID"))),
+        "agent_id",
+    )
+    tools = _string_list(data.get("tools", data.get("FLEET_TOOLS")), "tools")
+    kind = _optional_str(data.get("kind", data.get("FLEET_KIND")), "kind")
+    if not kind:
+        kinds = {tool_kind(item) for item in tools}
+        if CURSOR_CLOUD_TOOL_ID in kinds or "cursor-cloud" in kinds:
+            kind = CURSOR_CLOUD_TOOL_ID
+        elif "install" in kinds:
+            kind = "clawhub-install"
+        elif "run" in kinds:
+            kind = "clawhub-run"
+        elif "search" in kinds:
+            kind = "clawhub-search"
+        else:
+            kind = "fleet-delegate"
+    if install_and_run_conflict(tools):
+        raise FleetConfigError(
+            "Refusing install and run in the same turn; install first, run later.",
+            code="install_run_same_turn",
+        )
+    return {
+        "instruction": instruction,
+        "node_id": node_id,
+        "agent_id": agent_id,
+        "tools": tools,
+        "kind": kind,
+    }
+
+
 def normalize_fleet_config(document: Mapping[str, Any]) -> dict[str, Any]:
     """Return a canonical fleet config dict or raise :class:`FleetConfigError`."""
-    data = _require_mapping(document, "fleet config")
+    data = coerce_orchestrator_document(_require_mapping(document, "fleet config"))
     _forbid_embedded_secrets(data)
-    known = {
-        "fleet_id", "max_concurrency", "worker_template", "webhook_callback_url",
-        "secrets_ref", "backoff", "retry", "kill_switch", "replicas",
-    }
-    unknown = set(data) - known
+    unknown = set(data) - _KNOWN_CONFIG_KEYS
     if unknown:
         raise FleetConfigError(f"Unknown fleet config keys: {sorted(unknown)}.")
 
@@ -265,10 +504,16 @@ def normalize_fleet_config(document: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(kill_switch, bool):
         raise FleetConfigError("kill_switch must be a boolean.")
 
+    members = data.get("members")
+    if members is None:
+        member_list: list[dict[str, Any]] = []
+    else:
+        member_list = list(members)
+
     replicas = data.get("replicas")
     max_concurrency = _max_concurrency(data.get("max_concurrency"))
     if replicas is None:
-        replica_count = 1
+        replica_count = min(len(member_list), max_concurrency) if member_list else 1
     else:
         if isinstance(replicas, bool) or not isinstance(replicas, int) or replicas < 0:
             raise FleetConfigError("replicas must be an integer >= 0.")
@@ -278,6 +523,15 @@ def normalize_fleet_config(document: Mapping[str, Any]) -> dict[str, Any]:
             f"replicas ({replica_count}) exceeds max_concurrency ({max_concurrency}).",
             code="concurrency_cap",
         )
+
+    coordinator = _optional_str(data.get("coordinator_agent_id"), "coordinator_agent_id")
+    if not coordinator and member_list:
+        for member in member_list:
+            if member.get("role") == "orchestrator":
+                coordinator = str(member["agent_id"])
+                break
+        if not coordinator:
+            coordinator = str(member_list[0]["agent_id"])
 
     return {
         "fleet_id": fleet_id,
@@ -289,6 +543,8 @@ def normalize_fleet_config(document: Mapping[str, Any]) -> dict[str, Any]:
         "retry": _retry(data.get("retry")),
         "kill_switch": kill_switch,
         "replicas": replica_count,
+        "members": member_list,
+        "coordinator_agent_id": coordinator,
     }
 
 
@@ -330,4 +586,42 @@ def example_fleet_config() -> dict[str, Any]:
         "retry": dict(DEFAULT_RETRY),
         "kill_switch": False,
         "replicas": 1,
+    })
+
+
+def combined_fleet_document() -> dict[str, Any]:
+    """n8n-shaped sample: fleetId hermes-clawhub-combined + three members."""
+    return copy.deepcopy({
+        "fleetId": COMBINED_FLEET_ID,
+        "maxConcurrency": 3,
+        "members": [
+            {
+                "agentId": "orchestrator",
+                "role": "coordinator",
+                "tools": [],
+                "memoryScope": "fleet",
+                "lifecycle": "persistent",
+            },
+            {
+                "agentId": "clawhub-skill-runner",
+                "role": "specialist",
+                "tools": [
+                    f"{CLAWHUB_TOOL_PREFIX}clawhub-search",
+                    f"{CLAWHUB_TOOL_PREFIX}clawhub-install",
+                    f"{CLAWHUB_TOOL_PREFIX}clawhub-run",
+                ],
+                "memoryScope": "fleet",
+                "lifecycle": "task",
+            },
+            {
+                "agentId": "cursor-cloud-delegate",
+                "role": "specialist",
+                "tools": [CURSOR_CLOUD_TOOL_ID],
+                "memoryScope": "fleet",
+                "lifecycle": "task",
+            },
+        ],
+        "webhookCallbackUrl": "http://127.0.0.1:5678/webhook/hermes-fleet",
+        "secretsRef": ["OPENROUTER_API_KEY", "FLEET_HTTP_TOKEN"],
+        "killSwitch": False,
     })

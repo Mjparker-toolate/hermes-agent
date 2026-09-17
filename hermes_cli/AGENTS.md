@@ -52,7 +52,9 @@ invalidation with `--now` opt-in (root invariant).
   gateway, logging, cron, fleet, profiles, plugins, honcho`. `auxiliary` = per-task side-LLM overrides
   (`agent/AGENTS.md`); `curator` = `enabled, interval_hours, min_idle_hours, stale_after_days,
   archive_after_days, backup.*`. `fleet` = loopback worker-fleet cap + HTTP bind
-  (`hermes_cli/fleet_schema.py`, v1 max_concurrency 5).
+  (`hermes_cli/fleet_schema.py`, v1 max_concurrency 5). Accepts n8n camelCase
+  `fleetId`/`members`; `POST /fleet/{id}/delegate` is the n8n fleet-delegate
+  contract (inflight cap, install+run refused, cursor-cloud recorded not executed).
 - **.env = SECRETS ONLY** (keys, tokens, passwords): add to `OPTIONAL_ENV_VARS` with
   `{"description", "prompt", "url", "password": True, "category": provider|tool|messaging|setting}`.
   Non-secret settings go in config.yaml; if internal code needs an env mirror, bridge it in code

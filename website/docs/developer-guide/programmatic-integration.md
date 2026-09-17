@@ -165,6 +165,7 @@ A `200` (and the `run.steered` event) means the text was **queued**, not that th
 - **You're writing a custom desktop / web / TUI host and want every Hermes feature** (slash commands, approvals, clarify, multi-agent, session branching) → TUI gateway JSON-RPC.
 - **You want any OpenAI-compatible frontend, a language-agnostic HTTP client, or curl-driven automation** → API server.
 - **You want a Python in-process embed without a subprocess** → import `run_agent.AIAgent` directly. See [Agent Loop](./agent-loop).
+- **You want n8n agent-fleets to drive local Hermes workers** → Fleet HTTP (`POST /fleet/{id}/delegate`). See [Fleet Orchestration](./fleet-orchestration). Cursor cloud stays on the Cloud lane.
 
 ---
 

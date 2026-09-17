@@ -74,6 +74,14 @@ def main(argv: list[str] | None = None) -> int:
     stop = sub.add_parser("stop")
     stop.add_argument("--fleet-id", required=True)
 
+    delegate = sub.add_parser("delegate")
+    delegate.add_argument("--fleet-id", required=True)
+    delegate.add_argument("--instruction", default="", help="Task text; prefer FLEET_INSTRUCTION env or stdin")
+    delegate.add_argument("--agent-id", default="")
+    delegate.add_argument("--node-id", default="")
+    delegate.add_argument("--kind", default="")
+    delegate.add_argument("--tools", default="")
+
     args = parser.parse_args(argv)
     token = _token()
     if not token:
@@ -95,6 +103,22 @@ def main(argv: list[str] | None = None) -> int:
         status_code, result = _request(
             "POST", f"{base}/fleet/{args.fleet_id}/scale",
             {"replicas": args.replicas}, token,
+        )
+    elif args.action == "delegate":
+        instruction = args.instruction or os.environ.get("FLEET_INSTRUCTION") or ""
+        if not instruction.strip() and not sys.stdin.isatty():
+            instruction = sys.stdin.read()
+        tools = [part.strip() for part in (args.tools or "").split(",") if part.strip()]
+        status_code, result = _request(
+            "POST", f"{base}/fleet/{args.fleet_id}/delegate",
+            {
+                "instruction": instruction,
+                "agentId": args.agent_id or os.environ.get("FLEET_AGENT_ID") or "",
+                "nodeId": args.node_id or os.environ.get("FLEET_NODE_ID") or "",
+                "kind": args.kind or os.environ.get("FLEET_KIND") or "",
+                "tools": tools,
+            },
+            token,
         )
     else:
         status_code, result = _request("POST", f"{base}/fleet/{args.fleet_id}/stop", {}, token)
