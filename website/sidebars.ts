@@ -805,6 +805,7 @@ const sidebars: SidebarsConfig = {
             'developer-guide/browser-supervisor',
             'developer-guide/acp-internals',
             'developer-guide/cron-internals',
+            'developer-guide/fleet-orchestration',
             'developer-guide/egress-internals',
             'developer-guide/trajectory-format',
           ],

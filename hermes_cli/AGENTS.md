@@ -49,9 +49,12 @@ invalidation with `--now` opt-in (root invariant).
   migrate/transform existing config (rename keys, restructure); new keys deep-merge automatically.
   Top-level sections (non-exhaustive): `model, agent, terminal, compression, display, stt, tts,
   memory, security, delegation, smart_model_routing, checkpoints, auxiliary, curator, skills,
-  gateway, logging, cron, profiles, plugins, honcho`. `auxiliary` = per-task side-LLM overrides
+  gateway, logging, cron, fleet, profiles, plugins, honcho`. `auxiliary` = per-task side-LLM overrides
   (`agent/AGENTS.md`); `curator` = `enabled, interval_hours, min_idle_hours, stale_after_days,
-  archive_after_days, backup.*`.
+  archive_after_days, backup.*`. `fleet` = loopback worker-fleet cap + HTTP bind
+  (`hermes_cli/fleet_schema.py`, default max_concurrency 3, hard cap 5). Accepts n8n camelCase
+  `fleetId`/`members`; `POST /fleet/{id}/delegate` is the n8n fleet-delegate
+  contract (inflight cap, install+run refused, cursor-cloud recorded not executed).
 - **.env = SECRETS ONLY** (keys, tokens, passwords): add to `OPTIONAL_ENV_VARS` with
   `{"description", "prompt", "url", "password": True, "category": provider|tool|messaging|setting}`.
   Non-secret settings go in config.yaml; if internal code needs an env mirror, bridge it in code
