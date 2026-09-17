@@ -1,20 +1,21 @@
 ---
 sidebar_position: 8
 title: "Programmatic Integration"
-description: "Three protocols for driving hermes-agent from external programs: ACP, the TUI gateway JSON-RPC, and the OpenAI-compatible HTTP API"
+description: "Protocols for driving hermes-agent from external programs: ACP, TUI gateway JSON-RPC, OpenAI-compatible HTTP, and local fleet HTTP"
 ---
 
 # Programmatic Integration
 
-Hermes ships three protocols for driving the agent from external programs — IDE plugins, custom UIs, CI pipelines, embedded sub-agents. Pick the one that matches your transport and consumer.
+Hermes ships four protocols for driving the agent from external programs — IDE plugins, custom UIs, CI pipelines, embedded sub-agents, and a local worker-fleet HTTP API for n8n. Pick the one that matches your transport and consumer.
 
 | Protocol | Transport | Best for | Defined by |
 |----------|-----------|----------|------------|
 | **ACP** | JSON-RPC over stdio | IDE clients (VS Code, Zed, JetBrains) that already speak the [Agent Client Protocol](https://github.com/zed-industries/agent-client-protocol) | `acp_adapter/` |
 | **TUI gateway** | JSON-RPC over stdio (or WebSocket) | Custom hosts that want fine-grained control of sessions, slash commands, approvals, and streaming events | `tui_gateway/server.py` |
 | **API server** | HTTP + Server-Sent Events | OpenAI-compatible frontends (Open WebUI, LobeChat, LibreChat…) and language-agnostic web clients | `gateway/platforms/api_server.py` |
+| **Fleet HTTP** | Loopback HTTP + bearer token | n8n / ClawHub-installed skills spawning a capped pool of worker sessions | `hermes_cli/fleet_http.py` — [Fleet Orchestration](./fleet-orchestration) |
 
-All three drive the same `AIAgent` core. They differ only in wire format and which set of features they expose.
+The first three drive the same `AIAgent` core and differ only in wire format. Fleet HTTP is a **session-slot orchestrator** (concurrency cap, drain, kill switch) that wraps `SessionDB` and the [subagent lifecycle API](./subagent-lifecycle-api.md); it does not add a new process supervisor.
 
 ---
 

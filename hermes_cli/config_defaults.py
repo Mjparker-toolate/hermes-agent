@@ -1247,6 +1247,15 @@ DEFAULT_CONFIG = {
         # deliverable). Async-delegation results are NEVER suppressed.
         "surface_child_process_notifications": False,
     },
+    # Local Hermes↔orchestrator fleet glue (n8n / ClawHub-installed skill). v1 is loopback-only,
+    # concurrency hard-capped at 5, and never embeds secrets — see hermes_cli/fleet_schema.py.
+    "fleet": {
+        "max_concurrency": 5,  # v1 ceiling; fleet documents cannot exceed this
+        "http": {
+            "host": "127.0.0.1",  # loopback only; non-loopback binds are refused
+            "port": 8755,
+        },
+    },
     # Ephemeral prefill messages file — JSON list of {role, content} dicts injected at the start of
     # every API call for few-shot priming. Never saved to sessions/logs/trajectories.
     "prefill_messages_file": "",
@@ -2751,6 +2760,11 @@ OPTIONAL_ENV_VARS = {
     "WEBHOOK_SECRET": _msg(
         "Global HMAC secret for webhook signature validation (overridable per route in "
         "config.yaml).", "Webhook secret", None, password=True),
+    "FLEET_HTTP_TOKEN": _setting(
+        "Bearer token for the loopback Hermes fleet HTTP API (`hermes fleet serve`). "
+        "Leave empty to auto-generate a token at $HERMES_HOME/fleets/.http_token.",
+        "Fleet HTTP token (leave empty to auto-generate on serve)",
+        None, password=True, advanced=True),
     # ── Agent settings ── (MESSAGING_CWD is gone: use terminal.cwd in config.yaml, which the
     # gateway bridges to TERMINAL_CWD.)
     "SUDO_PASSWORD": _setting(

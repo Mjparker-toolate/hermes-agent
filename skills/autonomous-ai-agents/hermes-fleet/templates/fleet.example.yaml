@@ -1,0 +1,24 @@
+# Example v1 fleet document. Secrets are names only — never values.
+fleet_id: local-dev
+max_concurrency: 3
+replicas: 1
+worker_template:
+  model: ""
+  provider: ""
+  tools:
+    - terminal
+    - file
+  skills:
+    - hermes-fleet
+  role: leaf
+  goal: ""
+webhook_callback_url: http://127.0.0.1:5678/webhook/hermes-fleet
+secrets_ref:
+  - OPENROUTER_API_KEY
+backoff:
+  initial_seconds: 1
+  max_seconds: 30
+  multiplier: 2
+retry:
+  max_attempts: 2
+kill_switch: false
