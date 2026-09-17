@@ -1,9 +1,9 @@
 """Fleet config schema and validation for the v1 Hermes↔orchestrator glue.
 
 A fleet document is YAML or JSON. Secrets are **names only** (``secrets_ref``);
-values never belong in the document. v1 hard-caps ``max_concurrency`` at 5 and
-refuses non-loopback callback URLs so a local n8n/ClawHub caller cannot fan
-out to paid cloud or an open SSRF sink.
+values never belong in the document. v1 defaults ``max_concurrency`` to 3
+and hard-caps it at 5. Non-loopback callback URLs are refused so a local
+n8n/ClawHub caller cannot fan out to paid cloud or an open SSRF sink.
 
 n8n agent-fleets documents (camelCase ``fleetId`` + ``members``) are coerced
 into this canonical snake_case shape. Hermes does **not** run n8n's task
@@ -20,7 +20,7 @@ from typing import Any, Mapping
 from urllib.parse import urlparse
 
 V1_MAX_CONCURRENCY = 5
-DEFAULT_MAX_CONCURRENCY = 5
+DEFAULT_MAX_CONCURRENCY = 3
 FLEET_MAX_MEMBERS = 50
 FLEET_INSTRUCTION_MAX_LENGTH = 10000
 FLEET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")

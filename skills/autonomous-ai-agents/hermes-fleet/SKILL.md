@@ -25,7 +25,7 @@ workers and does not embed secrets.
 
 - n8n (`N8N_ENABLED_MODULES=agents,agent-fleets`) needs a Hermes webhook.
 - `fleet-delegate` / ClawHub `scripts/run.py` must POST to loopback Hermes.
-- You need a kill switch and a hard concurrency cap (v1 max 5).
+- You need a kill switch, default 3 child slots, and a hard cap of 5.
 
 Do not use this for public internet binds, unbounded fan-out, or storing
 API keys in YAML.
@@ -80,8 +80,8 @@ Sample members: `orchestrator`, `clawhub-skill-runner`,
 ## Procedure
 
 1. Confirm `kill_switch` is false in the fleet document.
-2. Confirm `max_concurrency` is ≤ 5. Members above the cap are stored;
-   only `max_concurrency` slots spawn.
+2. Confirm `max_concurrency` defaults to 3 and is ≤ 5. Members above the
+   live cap are stored; only `max_concurrency` slots spawn.
 3. List credential **names** under `secrets_ref` (for example
    `OPENROUTER_API_KEY`). Never paste values.
 4. If n8n should receive lifecycle events, set `webhook_callback_url` to a
@@ -103,8 +103,8 @@ Sample members: `orchestrator`, `clawhub-skill-runner`,
 ## Verification
 
 - Combined YAML starts `fleet_id: hermes-clawhub-combined` with three
-  tagged members and `live_workers` ≤ 3.
+  tagged members and `live_workers` ≤ 3 (the live default).
 - `hermes fleet scale <id> --replicas 6` fails when `max_concurrency` is
-  5.
+  5 (hard ceiling).
 - Same-turn install+run delegate returns `install_run_same_turn`.
 - `hermes fleet stop <id>` leaves `status: stopped` and zero live workers.

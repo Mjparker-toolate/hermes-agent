@@ -91,6 +91,17 @@ def test_mutating_routes_require_bearer_token(tmp_path, monkeypatch):
         _stop(server, thread)
 
 
+def test_start_without_max_concurrency_uses_default_three(tmp_path, monkeypatch):
+    server, thread, base, token, _mgr = _start(tmp_path, monkeypatch)
+    try:
+        status, started = _call(base, "POST", "/fleet/start", token, {"fleet_id": "def3"})
+        assert status == 201
+        assert started["max_concurrency"] == 3
+        assert started["live_workers"] == 1
+    finally:
+        _stop(server, thread)
+
+
 def test_start_status_scale_stop_lifecycle(tmp_path, monkeypatch):
     server, thread, base, token, _mgr = _start(tmp_path, monkeypatch)
     try:

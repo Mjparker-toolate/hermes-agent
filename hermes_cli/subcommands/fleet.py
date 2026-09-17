@@ -12,7 +12,8 @@ def build_fleet_parser(subparsers, *, cmd_fleet: Callable) -> None:
         help="Local Hermes worker-fleet orchestration (n8n / ClawHub glue)",
         description=(
             "Start, scale, and stop a capped fleet of Hermes worker sessions. "
-            "v1 binds loopback HTTP for n8n and stores fleet state under $HERMES_HOME/fleets/."
+            "v1 defaults max_concurrency to 3 (hard cap 5), binds loopback HTTP "
+            "for n8n, and stores fleet state under $HERMES_HOME/fleets/."
         ),
     )
     fleet_sub = parser.add_subparsers(dest="fleet_action")
@@ -20,7 +21,7 @@ def build_fleet_parser(subparsers, *, cmd_fleet: Callable) -> None:
     start = fleet_sub.add_parser("start", help="Create a fleet and spawn worker sessions")
     start.add_argument("--config", help="Path to a fleet YAML/JSON document")
     start.add_argument("--json", dest="json", help="Inline fleet JSON object")
-    start.add_argument("--replicas", type=int, help="Live worker count (capped by max_concurrency, v1 max 5)")
+    start.add_argument("--replicas", type=int, help="Live worker count (default max_concurrency 3, hard cap 5)")
 
     status = fleet_sub.add_parser("status", help="Show fleet status and workers")
     status.add_argument("fleet_id", help="Fleet id")

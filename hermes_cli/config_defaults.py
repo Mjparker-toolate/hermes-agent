@@ -1248,9 +1248,9 @@ DEFAULT_CONFIG = {
         "surface_child_process_notifications": False,
     },
     # Local Hermes↔orchestrator fleet glue (n8n / ClawHub-installed skill). v1 is loopback-only,
-    # concurrency hard-capped at 5, and never embeds secrets — see hermes_cli/fleet_schema.py.
+    # default child slots 3, hard-capped at 5, and never embeds secrets — see hermes_cli/fleet_schema.py.
     "fleet": {
-        "max_concurrency": 5,  # v1 ceiling; fleet documents cannot exceed this
+        "max_concurrency": 3,  # live default; documents may raise up to V1_MAX_CONCURRENCY (5)
         "http": {
             "host": "127.0.0.1",  # loopback only; non-loopback binds are refused
             "port": 8755,

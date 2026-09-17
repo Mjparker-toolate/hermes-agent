@@ -1,4 +1,5 @@
 # n8n agent-fleets sample. Hermes stores members and caps concurrency.
+# Live default maxConcurrency is 3; hard ceiling is 5.
 # n8n owns the fan-out/fan-in task graph (not executed here).
 # Secrets are names only — never values.
 fleetId: hermes-clawhub-combined

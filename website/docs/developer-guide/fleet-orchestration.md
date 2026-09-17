@@ -16,9 +16,10 @@ Hermes exposes a **capped pool of worker sessions** plus a loopback
 | ClawHub | Skill registry (`clawhub-search` / `install` / `run`) |
 | n8n agent-fleets | Fleet protocol (fan-out/fan-in graph, echo runner by default) |
 
-n8n owns the task graph. Hermes stores `members`, caps
-`max_concurrency` (v1 ≤ 5), and records specialist turns. It does **not**
-call Cursor cloud (Cloud lane) or eval untrusted ClawHub `SKILL.md`.
+n8n owns the task graph. Hermes stores `members`, defaults
+`max_concurrency` to **3**, hard-caps it at **5**, and records specialist
+turns. It does **not** call Cursor cloud (Cloud lane) or eval untrusted
+ClawHub `SKILL.md`.
 
 This slice wraps existing Hermes primitives instead of inventing a process
 supervisor:
@@ -80,7 +81,8 @@ member list (n8n's graph may list more members than live workers).
 
 Invariants enforced by `normalize_fleet_config()`:
 
-- `max_concurrency` is an integer in `1..5`.
+- Omitted `max_concurrency` defaults to **3** (`config.yaml` `fleet.max_concurrency`).
+- `max_concurrency` is an integer in `1..5` (hard ceiling 5 until live cost signal).
 - Explicit `replicas` cannot exceed `max_concurrency`.
 - `secrets_ref` entries must look like env-var **names**. Keys such as
   `api_key` / `token` / `password` with a non-empty value are rejected.

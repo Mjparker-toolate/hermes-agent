@@ -6,6 +6,7 @@ import pytest
 
 from hermes_cli.config_defaults import DEFAULT_CONFIG, OPTIONAL_ENV_VARS
 from hermes_cli.fleet_schema import (
+    DEFAULT_MAX_CONCURRENCY,
     V1_MAX_CONCURRENCY,
     FleetConfigError,
     example_fleet_config,
@@ -31,12 +32,35 @@ def test_example_config_normalizes_and_stays_at_or_under_v1_cap():
     assert is_loopback_url(normalized["webhook_callback_url"])
 
 
-def test_default_config_fleet_cap_matches_schema_ceiling():
-    """config.yaml default and the schema share one v1 ceiling — not a frozen version."""
-    assert DEFAULT_CONFIG["fleet"]["max_concurrency"] == V1_MAX_CONCURRENCY
+def test_default_config_fleet_children_are_below_the_hard_ceiling():
+    """Live default is 3; documents may raise up to the v1 ceiling of 5."""
+    assert DEFAULT_CONFIG["fleet"]["max_concurrency"] == DEFAULT_MAX_CONCURRENCY
+    assert DEFAULT_MAX_CONCURRENCY < V1_MAX_CONCURRENCY
     assert DEFAULT_CONFIG["fleet"]["http"]["host"] == "127.0.0.1"
     assert OPTIONAL_ENV_VARS["FLEET_HTTP_TOKEN"]["password"] is True
     assert OPTIONAL_ENV_VARS["FLEET_HTTP_TOKEN"]["category"] == "setting"
+
+
+def test_omitted_max_concurrency_defaults_to_three_not_the_ceiling():
+    normalized = normalize_fleet_config({"fleet_id": "defaults-only"})
+    assert normalized["max_concurrency"] == DEFAULT_MAX_CONCURRENCY == 3
+    assert normalized["replicas"] == 1
+
+
+def test_five_members_without_explicit_cap_spawn_the_default_three():
+    normalized = normalize_fleet_config({
+        "fleetId": "five-kids",
+        "members": ["orchestrator", "a", "b", "c", "d"],
+    })
+    assert len(normalized["members"]) == 5
+    assert normalized["max_concurrency"] == 3
+    assert normalized["replicas"] == 3
+
+
+def test_explicit_five_is_accepted_as_the_hard_ceiling():
+    normalized = normalize_fleet_config(_doc(max_concurrency=V1_MAX_CONCURRENCY, replicas=5))
+    assert normalized["max_concurrency"] == V1_MAX_CONCURRENCY == 5
+    assert normalized["replicas"] == 5
 
 
 def test_max_concurrency_above_v1_ceiling_is_refused():

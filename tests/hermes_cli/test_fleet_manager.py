@@ -249,6 +249,19 @@ def test_members_tag_spawned_workers(tmp_path, monkeypatch):
     assert status["coordinator_agent_id"] == "orchestrator"
 
 
+def test_five_members_honor_the_live_default_of_three(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    mgr = _manager()
+    status = mgr.start({
+        "fleetId": "default-three",
+        "members": ["orchestrator", "a", "b", "c", "d"],
+    })
+    assert status["max_concurrency"] == 3
+    assert status["replicas"] == 3
+    assert status["live_workers"] == 3
+    assert len(status["members"]) == 5
+
+
 def test_delegate_records_turn_and_releases_inflight(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     mgr = _manager()

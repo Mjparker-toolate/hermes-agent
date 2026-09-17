@@ -22,7 +22,7 @@ on argv.
 ## When to Use
 
 - n8n `N8N_AGENT_FLEETS_RUNNER=delegate` routes a `clawhub:` tool here.
-- A ClawHub member needs the local Hermes concurrency cap (`max_concurrency` ≤ 5).
+- A ClawHub member needs the local Hermes cap (default 3, hard max 5).
 
 Do not use this to spawn paid cloud workers or to execute untrusted
 `SKILL.md` files.

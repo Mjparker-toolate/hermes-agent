@@ -7,7 +7,8 @@ host path as ``delegate_task``). HTTP/n8n callers have no parent, so they get
 idle session slots the orchestrator can later drive through existing webhook
 or cron entry points.
 
-Concurrency is enforced per fleet and cannot exceed :data:`V1_MAX_CONCURRENCY`.
+Concurrency defaults to :data:`DEFAULT_MAX_CONCURRENCY` (3) and cannot
+exceed :data:`V1_MAX_CONCURRENCY` (5).
 """
 
 from __future__ import annotations

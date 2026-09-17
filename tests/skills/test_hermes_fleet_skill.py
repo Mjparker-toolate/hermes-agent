@@ -28,6 +28,7 @@ def test_example_yaml_is_a_valid_v1_fleet_document():
     text = EXAMPLE.read_text(encoding="utf-8")
     config = load_fleet_document(text, source=str(EXAMPLE))
     assert config["fleet_id"]
+    assert config["max_concurrency"] == 3
     assert config["max_concurrency"] <= V1_MAX_CONCURRENCY
     assert config["replicas"] <= config["max_concurrency"]
     assert all(name.isupper() or "_" in name for name in config["secrets_ref"])
@@ -51,6 +52,8 @@ def test_skill_points_agents_at_native_tools_and_the_http_surface():
     assert "127.0.0.1" in text
     assert "secrets_ref" in text
     assert "kill_switch" in text
+    assert "defaults to 3" in text
+    assert "hard cap of 5" in text or "hard ceiling" in text
     relative = "templates/fleet.example.yaml"
     assert relative in text
     assert (SKILL_DIR / relative).is_file()
@@ -65,6 +68,7 @@ def test_combined_yaml_is_the_n8n_sample_contract():
     text = COMBINED.read_text(encoding="utf-8")
     config = load_fleet_document(text, source=str(COMBINED))
     assert config["fleet_id"] == "hermes-clawhub-combined"
+    assert config["max_concurrency"] == 3
     assert config["max_concurrency"] <= V1_MAX_CONCURRENCY
     assert {m["agent_id"] for m in config["members"]} == {
         "orchestrator", "clawhub-skill-runner", "cursor-cloud-delegate",
