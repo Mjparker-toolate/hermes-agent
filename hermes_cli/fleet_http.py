@@ -12,7 +12,6 @@ import os
 import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from socketserver import ThreadingMixIn
 from typing import Any, Callable
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -206,7 +205,7 @@ def make_handler(manager: FleetManager, token: str) -> type[BaseHTTPRequestHandl
     return FleetHandler
 
 
-class LoopbackHTTPServer(ThreadingMixIn, ThreadingHTTPServer):
+class LoopbackHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 

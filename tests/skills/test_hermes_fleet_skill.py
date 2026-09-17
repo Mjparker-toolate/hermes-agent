@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 from hermes_cli.fleet_schema import V1_MAX_CONCURRENCY, load_fleet_document
@@ -99,23 +100,25 @@ def test_client_http_lifecycle_against_loopback_server(tmp_path, monkeypatch, ca
             "--base-url", base, "start", "--config", str(EXAMPLE),
         ])
         assert rc == 0
-        started = __import__("json").loads(capsys.readouterr().out)
+        started = json.loads(capsys.readouterr().out)
         assert started["live_workers"] >= 1
         fleet_id = started["fleet_id"]
 
         rc = client.main(["--base-url", base, "status", "--fleet-id", fleet_id])
         assert rc == 0
+        status = json.loads(capsys.readouterr().out)
+        assert status["live_workers"] == started["live_workers"]
 
         rc = client.main([
             "--base-url", base, "scale", "--fleet-id", fleet_id, "--replicas", "2",
         ])
         assert rc == 0
-        scaled = __import__("json").loads(capsys.readouterr().out)
+        scaled = json.loads(capsys.readouterr().out)
         assert scaled["live_workers"] == 2
 
         rc = client.main(["--base-url", base, "stop", "--fleet-id", fleet_id])
         assert rc == 0
-        stopped = __import__("json").loads(capsys.readouterr().out)
+        stopped = json.loads(capsys.readouterr().out)
         assert stopped["status"] == "stopped"
         assert stopped["live_workers"] == 0
     finally:
