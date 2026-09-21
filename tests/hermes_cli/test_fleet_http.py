@@ -266,6 +266,116 @@ def test_normalize_error_code_survives_http_envelope():
     assert exc.value.code == "concurrency_cap"
 
 
+def test_start_concurrency_cap_returns_409(tmp_path, monkeypatch):
+    server, thread, base, token, _mgr = _start(tmp_path, monkeypatch)
+    try:
+        status, payload = _call(
+            base, "POST", "/fleet/start", token,
+            {"fleet_id": "too-big", "max_concurrency": 99, "replicas": 1},
+        )
+        assert status == 409
+        assert payload["code"] == "concurrency_cap"
+    finally:
+        _stop(server, thread)
+
+
+def test_kill_switch_route_arms_a_running_fleet(tmp_path, monkeypatch):
+    server, thread, base, token, _mgr = _start(tmp_path, monkeypatch)
+    try:
+        _call(
+            base, "POST", "/fleet/start", token,
+            {"fleet_id": "armed", "max_concurrency": 3, "replicas": 1},
+        )
+        status, killed = _call(
+            base, "POST", "/fleet/armed/kill", token, {"enabled": True},
+        )
+        assert status == 200
+        assert killed["kill_switch"] is True
+        status, scale = _call(
+            base, "POST", "/fleet/armed/scale", token, {"replicas": 2},
+        )
+        assert status == 403
+        assert scale["code"] == "kill_switch"
+        status, cleared = _call(
+            base, "POST", "/fleet/armed/kill", token, {"enabled": False},
+        )
+        assert status == 200
+        assert cleared["kill_switch"] is False
+    finally:
+        _stop(server, thread)
+
+
+def test_loopback_callback_ignores_http_proxy(monkeypatch):
+    received: list[dict] = []
+    proxied: list[str] = []
+
+    class Hook(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            return
+
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length)
+            received.append(json.loads(raw.decode("utf-8")))
+            body = b'{"ok": true}\n'
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    class Proxy(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            return
+
+        def do_POST(self):  # noqa: N802
+            proxied.append(self.path)
+            self.send_response(502)
+            self.end_headers()
+
+        def do_CONNECT(self):  # noqa: N802
+            proxied.append(self.path)
+            self.send_response(502)
+            self.end_headers()
+
+    hook = HTTPServer(("127.0.0.1", 0), Hook)
+    proxy = HTTPServer(("127.0.0.1", 0), Proxy)
+    hook_thread = Thread(target=hook.serve_forever, daemon=True)
+    proxy_thread = Thread(target=proxy.serve_forever, daemon=True)
+    hook_thread.start()
+    proxy_thread.start()
+    try:
+        hook_host, hook_port = hook.server_address[:2]
+        _proxy_host, proxy_port = proxy.server_address[:2]
+        monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{proxy_port}")
+        monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{proxy_port}")
+        monkeypatch.setenv("HTTPS_PROXY", f"http://127.0.0.1:{proxy_port}")
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        post_loopback_callback(
+            f"http://{hook_host}:{hook_port}/hook",
+            {"event": "started", "fleet": {"fleet_id": "proxy-proof"}},
+        )
+        assert received == [{"event": "started", "fleet": {"fleet_id": "proxy-proof"}}]
+        assert proxied == []
+    finally:
+        hook.shutdown()
+        proxy.shutdown()
+        hook_thread.join(timeout=5)
+        proxy_thread.join(timeout=5)
+        hook.server_close()
+        proxy.server_close()
+
+
+def test_ipv6_loopback_selects_af_inet6():
+    import socket
+
+    from hermes_cli.fleet_http import loopback_address_family
+
+    assert loopback_address_family("127.0.0.1") == socket.AF_INET
+    assert loopback_address_family("::1") == socket.AF_INET6
+    assert loopback_address_family("[::1]") == socket.AF_INET6
+
+
 def test_n8n_start_and_delegate_round_trip(tmp_path, monkeypatch):
     from hermes_cli.fleet_schema import combined_fleet_document
 

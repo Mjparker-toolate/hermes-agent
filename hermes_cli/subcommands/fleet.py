@@ -44,14 +44,29 @@ def build_fleet_parser(subparsers, *, cmd_fleet: Callable) -> None:
     delegate.add_argument("--kind", default="", help="clawhub-search|clawhub-install|clawhub-run|cursor-cloud")
     delegate.add_argument("--tools", default="", help="Comma-separated tool ids for this turn")
 
+    kill = fleet_sub.add_parser(
+        "kill",
+        help="Arm the fleet kill switch (blocks start/scale-up/delegate)",
+    )
+    kill.add_argument("fleet_id", help="Fleet id")
+    kill.add_argument(
+        "--off",
+        action="store_true",
+        help="Clear the kill switch so scale-up and delegate may resume",
+    )
+
     fleet_sub.add_parser("list", aliases=["ls"], help="List known fleets")
 
     serve = fleet_sub.add_parser(
         "serve",
         help="Serve the loopback fleet HTTP API",
-        description="Bind 127.0.0.1 and expose POST /fleet/start, GET /fleet/{id}, POST /fleet/{id}/scale, POST /fleet/{id}/stop, POST /fleet/{id}/delegate.",
+        description=(
+            "Bind loopback HTTP (config.yaml fleet.http, or --host/--port) and expose "
+            "POST /fleet/start, GET /fleet/{id}, POST /fleet/{id}/scale, "
+            "POST /fleet/{id}/stop, POST /fleet/{id}/delegate, POST /fleet/{id}/kill."
+        ),
     )
-    serve.add_argument("--host", default="127.0.0.1", help="Bind host (loopback only in v1)")
-    serve.add_argument("--port", type=int, default=8755, help="Bind port (default 8755)")
+    serve.add_argument("--host", default=None, help="Bind host (loopback only; default from config.yaml)")
+    serve.add_argument("--port", type=int, default=None, help="Bind port (default from config.yaml fleet.http.port)")
 
     parser.set_defaults(func=cmd_fleet)

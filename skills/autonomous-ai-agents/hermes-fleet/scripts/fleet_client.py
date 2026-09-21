@@ -13,7 +13,7 @@ import os
 import sys
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 DEFAULT_BASE = "http://127.0.0.1:8755"
 
@@ -25,7 +25,26 @@ def _hermes_home() -> Path:
     return Path.home() / ".hermes"
 
 
+def _load_profile_env() -> None:
+    """Load $HERMES_HOME/.env so FLEET_HTTP_TOKEN is visible without a shell export."""
+    try:
+        from hermes_cli.env_loader import load_hermes_dotenv
+        load_hermes_dotenv(hermes_home=_hermes_home(), load_external_secrets=False)
+        return
+    except ImportError:
+        pass
+    path = _hermes_home() / ".env"
+    if not path.is_file():
+        return
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(dotenv_path=path, override=False)
+    except ImportError:
+        return
+
+
 def _token() -> str:
+    _load_profile_env()
     env = (os.environ.get("FLEET_HTTP_TOKEN") or "").strip()
     if env:
         return env
@@ -33,6 +52,11 @@ def _token() -> str:
     if path.is_file():
         return path.read_text(encoding="utf-8").strip()
     return ""
+
+
+def _urlopen_no_proxy(request: Request, timeout: float):
+    """Loopback calls must not follow HTTP_PROXY (that would leak the bearer token)."""
+    return build_opener(ProxyHandler({})).open(request, timeout=timeout)
 
 
 def _request(method: str, url: str, payload: dict | None, token: str) -> tuple[int, object]:
@@ -44,7 +68,7 @@ def _request(method: str, url: str, payload: dict | None, token: str) -> tuple[i
         headers["Content-Type"] = "application/json"
     request = Request(url, data=body, method=method, headers=headers)
     try:
-        with urlopen(request, timeout=15) as response:
+        with _urlopen_no_proxy(request, timeout=15) as response:
             raw = response.read().decode("utf-8")
             return response.status, json.loads(raw) if raw else {}
     except HTTPError as exc:
@@ -73,6 +97,10 @@ def main(argv: list[str] | None = None) -> int:
 
     stop = sub.add_parser("stop")
     stop.add_argument("--fleet-id", required=True)
+
+    kill = sub.add_parser("kill")
+    kill.add_argument("--fleet-id", required=True)
+    kill.add_argument("--off", action="store_true")
 
     delegate = sub.add_parser("delegate")
     delegate.add_argument("--fleet-id", required=True)
@@ -103,6 +131,11 @@ def main(argv: list[str] | None = None) -> int:
         status_code, result = _request(
             "POST", f"{base}/fleet/{args.fleet_id}/scale",
             {"replicas": args.replicas}, token,
+        )
+    elif args.action == "kill":
+        status_code, result = _request(
+            "POST", f"{base}/fleet/{args.fleet_id}/kill",
+            {"enabled": not args.off}, token,
         )
     elif args.action == "delegate":
         instruction = args.instruction or os.environ.get("FLEET_INSTRUCTION") or ""

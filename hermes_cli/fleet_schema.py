@@ -354,6 +354,16 @@ def _worker_template(raw: Any) -> dict[str, Any]:
     template["provider"] = _optional_str(data.get("provider"), "worker_template.provider")
     template["tools"] = _string_list(data.get("tools"), "worker_template.tools")
     template["skills"] = _string_list(data.get("skills"), "worker_template.skills")
+    if template["provider"]:
+        raise FleetConfigError(
+            "v1 does not apply worker_template.provider; omit it "
+            "(the parent turn's provider is inherited)."
+        )
+    if template["skills"]:
+        raise FleetConfigError(
+            "v1 does not apply worker_template.skills; omit it "
+            "(install skills in a prior turn, then run)."
+        )
     role_raw = _optional_str(data.get("role"), "worker_template.role") or "leaf"
     template["role"] = _normalize_role(role_raw, label="worker_template.role")
     template["goal"] = _optional_str(data.get("goal"), "worker_template.goal")
@@ -414,9 +424,49 @@ def _secrets_ref(raw: Any) -> list[str]:
     return names
 
 
-def _max_concurrency(raw: Any) -> int:
+def configured_max_concurrency() -> int:
+    """``config.yaml`` ``fleet.max_concurrency``, clamped to ``1..V1_MAX_CONCURRENCY``."""
+    try:
+        from hermes_cli.config import load_config
+        raw = ((load_config() or {}).get("fleet") or {}).get("max_concurrency")
+    except Exception:
+        return DEFAULT_MAX_CONCURRENCY
     if raw is None:
         return DEFAULT_MAX_CONCURRENCY
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return DEFAULT_MAX_CONCURRENCY
+    return max(1, min(int(raw), V1_MAX_CONCURRENCY))
+
+
+def load_fleet_runtime_defaults() -> dict[str, Any]:
+    """Behavioral knobs from ``config.yaml`` ``fleet.*`` (not ``HERMES_*`` env vars)."""
+    host = "127.0.0.1"
+    port = 8755
+    try:
+        from hermes_cli.config import load_config
+        fleet = (load_config() or {}).get("fleet") or {}
+        http = fleet.get("http") if isinstance(fleet.get("http"), dict) else {}
+        raw_host = str(http.get("host") or host).strip() or host
+        if is_loopback_host(raw_host):
+            host = raw_host
+        try:
+            raw_port = int(http.get("port") or port)
+        except (TypeError, ValueError):
+            raw_port = port
+        if 1 <= raw_port <= 65535:
+            port = raw_port
+    except Exception:
+        pass
+    return {
+        "host": host,
+        "port": port,
+        "max_concurrency": configured_max_concurrency(),
+    }
+
+
+def _max_concurrency(raw: Any) -> int:
+    if raw is None:
+        return configured_max_concurrency()
     if isinstance(raw, bool) or not isinstance(raw, int):
         raise FleetConfigError("max_concurrency must be an integer.")
     if raw < 1:
@@ -576,7 +626,7 @@ def example_fleet_config() -> dict[str, Any]:
             "model": "",
             "provider": "",
             "tools": ["terminal", "file"],
-            "skills": ["hermes-fleet"],
+            "skills": [],
             "role": "leaf",
             "goal": "",
         },

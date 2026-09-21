@@ -8,8 +8,7 @@ from argparse import Namespace
 from pathlib import Path
 
 from hermes_cli.fleet_http import (
-    DEFAULT_HOST,
-    DEFAULT_PORT,
+    FleetHttpError,
     serve_forever,
     token_file_display,
 )
@@ -47,13 +46,14 @@ def fleet_command(args: Namespace) -> int:
         "scale": _cmd_scale,
         "stop": _cmd_stop,
         "delegate": _cmd_delegate,
+        "kill": _cmd_kill,
         "list": _cmd_list,
         "ls": _cmd_list,
         "serve": _cmd_serve,
     }
     handler = handlers.get(action)
     if handler is None:
-        print("Usage: hermes fleet {start|status|scale|stop|delegate|list|serve}")
+        print("Usage: hermes fleet {start|status|scale|stop|delegate|kill|list|serve}")
         print("Run 'hermes fleet --help' for details.")
         return 1
     try:
@@ -61,6 +61,9 @@ def fleet_command(args: Namespace) -> int:
     except FleetConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    except FleetHttpError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     except FleetError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -96,6 +99,12 @@ def _cmd_stop(args: Namespace) -> int:
     return 0
 
 
+def _cmd_kill(args: Namespace) -> int:
+    enabled = not bool(getattr(args, "off", False))
+    _print_json(_manager().set_kill_switch(args.fleet_id, enabled))
+    return 0
+
+
 def _cmd_delegate(args: Namespace) -> int:
     instruction = getattr(args, "instruction", None) or ""
     if not instruction.strip() and not sys.stdin.isatty():
@@ -118,12 +127,17 @@ def _cmd_list(args: Namespace) -> int:
 
 
 def _cmd_serve(args: Namespace) -> int:
-    host = getattr(args, "host", None) or DEFAULT_HOST
-    port = int(getattr(args, "port", None) or DEFAULT_PORT)
+    host = getattr(args, "host", None) or None
+    port = getattr(args, "port", None)
+    if port is not None:
+        port = int(port)
 
     def _ready(bound_host: str, bound_port: int) -> None:
         print(f"Hermes fleet HTTP listening on http://{bound_host}:{bound_port}")
-        print("Routes: POST /fleet/start  GET /fleet/{{id}}  POST /fleet/{{id}}/scale  POST /fleet/{{id}}/stop  POST /fleet/{{id}}/delegate")
+        print(
+            "Routes: POST /fleet/start  GET /fleet/{id}  POST /fleet/{id}/scale  "
+            "POST /fleet/{id}/stop  POST /fleet/{id}/delegate  POST /fleet/{id}/kill"
+        )
         print(f"Auth:   Authorization: Bearer <token>  (token file: {token_file_display()})")
         print("Bind is loopback-only in v1. State: " + f"{display_hermes_home()}/fleets/")
         sys.stdout.flush()

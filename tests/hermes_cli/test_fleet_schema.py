@@ -204,6 +204,24 @@ def test_coordinator_alias_on_worker_template_maps_to_orchestrator():
     assert normalized["worker_template"]["role"] == "orchestrator"
 
 
+def test_worker_template_provider_and_skills_are_rejected_until_applied():
+    with pytest.raises(FleetConfigError, match="provider"):
+        normalize_fleet_config(_doc(worker_template={"provider": "openrouter"}))
+    with pytest.raises(FleetConfigError, match="skills"):
+        normalize_fleet_config(_doc(worker_template={"skills": ["hermes-fleet"]}))
+
+
+def test_config_yaml_max_concurrency_is_used_when_document_omits_it():
+    from hermes_constants import get_hermes_home
+    from hermes_cli.fleet_schema import configured_max_concurrency, normalize_fleet_config
+
+    home = get_hermes_home()
+    (home / "config.yaml").write_text("fleet:\n  max_concurrency: 4\n", encoding="utf-8")
+    assert configured_max_concurrency() == 4
+    normalized = normalize_fleet_config({"fleet_id": "from-config"})
+    assert normalized["max_concurrency"] == 4
+
+
 def test_parse_delegate_refuses_install_and_run_same_turn():
     from hermes_cli.fleet_schema import parse_delegate_request
 

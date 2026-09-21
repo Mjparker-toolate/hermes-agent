@@ -10,11 +10,12 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 from hermes_cli.fleet_manager import (
     FleetError,
@@ -26,6 +27,7 @@ from hermes_cli.fleet_schema import (
     FleetConfigError,
     is_loopback_host,
     is_loopback_url,
+    load_fleet_runtime_defaults,
 )
 from hermes_cli.fleet_store import fleets_dir
 from hermes_constants import display_hermes_home
@@ -36,6 +38,24 @@ _MAX_BODY_BYTES = 64 * 1024
 _TOKEN_FILE = ".http_token"
 _TOKEN_MODE = 0o600
 _CALLBACK_TIMEOUT_SECONDS = 5
+_SCHEMA_HTTP_STATUS = {
+    "concurrency_cap": 409,
+    "install_run_same_turn": 409,
+    "already_running": 409,
+    "not_running": 409,
+}
+
+
+def configured_bind() -> tuple[str, int]:
+    """``config.yaml`` ``fleet.http`` host/port when CLI flags omit them."""
+    defaults = load_fleet_runtime_defaults()
+    return str(defaults["host"]), int(defaults["port"])
+
+
+def urlopen_loopback(request: Request, timeout: float):
+    """Open a loopback URL without inheriting HTTP_PROXY / ALL_PROXY."""
+    opener = build_opener(ProxyHandler({}))
+    return opener.open(request, timeout=timeout)
 
 
 class FleetHttpError(Exception):
@@ -85,7 +105,7 @@ def post_loopback_callback(url: str, payload: MappingLike) -> None:
         method="POST",
         headers={"Content-Type": "application/json", "Accept": "application/json"},
     )
-    with urlopen(request, timeout=_CALLBACK_TIMEOUT_SECONDS) as response:  # noqa: S310 — loopback-only
+    with urlopen_loopback(request, timeout=_CALLBACK_TIMEOUT_SECONDS) as response:
         response.read()
 
 
@@ -118,7 +138,7 @@ def _parse_path(path: str) -> tuple[str, str | None, str | None]:
         return "start", None, None
     if len(parts) == 2:
         return "status", parts[1], None
-    if len(parts) == 3 and parts[2] in {"scale", "stop", "delegate"}:
+    if len(parts) == 3 and parts[2] in {"scale", "stop", "delegate", "kill"}:
         return parts[2], parts[1], None
     return "unknown", None, None
 
@@ -202,9 +222,20 @@ def make_handler(manager: FleetManager, token: str) -> type[BaseHTTPRequestHandl
                 if action == "delegate" and method == "POST" and fleet_id:
                     self._send(200, manager.delegate(fleet_id, self._read_json()))
                     return
+                if action == "kill" and method == "POST" and fleet_id:
+                    body = self._read_json()
+                    enabled = body.get("enabled", body.get("kill_switch", True))
+                    if not isinstance(enabled, bool):
+                        raise FleetHttpError(
+                            400, "kill requires boolean 'enabled'.", code="invalid_config",
+                        )
+                    self._send(200, manager.set_kill_switch(fleet_id, enabled))
+                    return
                 raise FleetHttpError(404, f"No route for {method} {self.path}", code="not_found")
             except FleetConfigError as exc:
-                self._send_error_payload(400, str(exc), getattr(exc, "code", "invalid_config"))
+                code = getattr(exc, "code", "invalid_config")
+                status = _SCHEMA_HTTP_STATUS.get(code, 400)
+                self._send_error_payload(status, str(exc), code)
             except FleetError as exc:
                 self._send_error_payload(exc.status, str(exc), exc.code)
             except FleetHttpError as exc:
@@ -217,19 +248,38 @@ def make_handler(manager: FleetManager, token: str) -> type[BaseHTTPRequestHandl
     return FleetHandler
 
 
+def loopback_address_family(host: str, port: int = 0) -> int:
+    """AF_INET6 for ``::1``, AF_INET for ``127.0.0.1``."""
+    cleaned = str(host or "").strip().strip("[]")
+    try:
+        return socket.getaddrinfo(cleaned, port, type=socket.SOCK_STREAM)[0][0]
+    except (OSError, IndexError):
+        return socket.AF_INET6 if ":" in cleaned else socket.AF_INET
+
+
 class LoopbackHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
+    def __init__(self, server_address, RequestHandlerClass, bind_and_activate=True):
+        self.address_family = loopback_address_family(str(server_address[0] or ""), int(server_address[1] or 0))
+        super().__init__(server_address, RequestHandlerClass, bind_and_activate)
+
 
 def bind_fleet_server(
     *,
-    host: str = DEFAULT_HOST,
-    port: int = DEFAULT_PORT,
+    host: str | None = None,
+    port: int | None = None,
     manager: FleetManager | None = None,
     token: str | None = None,
     generate_token: bool = True,
 ) -> tuple[LoopbackHTTPServer, str]:
+    if host is None or port is None:
+        cfg_host, cfg_port = configured_bind()
+        if host is None:
+            host = cfg_host
+        if port is None:
+            port = cfg_port
     if not is_loopback_host(host):
         raise FleetHttpError(
             400,
@@ -246,8 +296,8 @@ def bind_fleet_server(
 
 def serve_forever(
     *,
-    host: str = DEFAULT_HOST,
-    port: int = DEFAULT_PORT,
+    host: str | None = None,
+    port: int | None = None,
     manager: FleetManager | None = None,
     ready: Callable[[str, int], None] | None = None,
 ) -> None:

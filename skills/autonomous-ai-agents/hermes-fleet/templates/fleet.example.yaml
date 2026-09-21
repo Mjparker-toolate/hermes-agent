@@ -9,8 +9,7 @@ worker_template:
   tools:
     - terminal
     - file
-  skills:
-    - hermes-fleet
+  skills: []   # v1 does not apply template skills; omit or leave empty
   role: leaf
   goal: ""
 webhook_callback_url: http://127.0.0.1:5678/webhook/hermes-fleet
