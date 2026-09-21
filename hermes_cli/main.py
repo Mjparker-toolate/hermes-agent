@@ -327,6 +327,7 @@ from hermes_cli.subcommands.auth import build_auth_parser
 from hermes_cli.subcommands.status import build_status_parser
 from hermes_cli.subcommands.pause import build_pause_parser
 from hermes_cli.subcommands.webhook import build_webhook_parser
+from hermes_cli.subcommands.fleet import build_fleet_parser
 from hermes_cli.subcommands.hooks import build_hooks_parser
 from hermes_cli.subcommands.doctor import build_doctor_parser
 from hermes_cli.subcommands.verify import build_verify_parser
@@ -1778,6 +1779,7 @@ cmd_auth = _forward_command("cmd_auth", "hermes_cli.auth_commands", "auth_comman
 cmd_status = _forward_command("cmd_status", "hermes_cli.status", "show_status", doc='Show status of all components.')
 cmd_cron = _forward_command("cmd_cron", "hermes_cli.cron", "cron_command", doc='Cron job management.')
 cmd_webhook = _forward_command("cmd_webhook", "hermes_cli.webhook", "webhook_command", doc='Webhook subscription management.')
+cmd_fleet = _forward_command("cmd_fleet", "hermes_cli.fleet", "fleet_command", forward_return=True, doc='Local worker-fleet orchestration.')
 cmd_kanban = _forward_command("cmd_kanban", "hermes_cli.kanban", "kanban_command", forward_return=True, doc='Multi-profile collaboration board.')
 cmd_project = _forward_command("cmd_project", "hermes_cli.projects_cmd", "projects_command", forward_return=True, doc='Manage projects (named, multi-folder workspaces).')
 cmd_hooks = _forward_command("cmd_hooks", "hermes_cli.hooks", "hooks_command", doc='Shell-hook inspection and management.')
@@ -3196,6 +3198,7 @@ def _build_cli_parser():
     build_cron_parser(subparsers, cmd_cron=cmd_cron)
     build_sync_parser(subparsers, cmd_sync=cmd_sync)
     build_webhook_parser(subparsers, cmd_webhook=cmd_webhook)
+    build_fleet_parser(subparsers, cmd_fleet=cmd_fleet)
 
     from hermes_cli.subcommands.peer import build_peer_parser
     build_peer_parser(subparsers)
