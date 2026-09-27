@@ -89,7 +89,14 @@ Invariants enforced by `normalize_fleet_config()`:
 - `webhook_callback_url`, when set, must be `http(s)` on loopback
   (`127.0.0.1`, `localhost`, `::1`).
 - `kill_switch: true` refuses `start`, scale-up, and delegate; stop/drain
-  still work.
+  still work. Arm or clear it on a running fleet with
+  `hermes fleet kill <id>` / `POST /fleet/{id}/kill`.
+- A second `start` while status is `running` is `already_running` (409),
+  even if every worker has failed or `replicas` is 0.
+- `worker_template.provider` and `worker_template.skills` are rejected in
+  v1 (not applied by the launcher). Use tools / role / model / goal.
+- Loopback HTTP clients and callbacks ignore `HTTP_PROXY` so the bearer
+  token never leaves the machine.
 - n8n-only keys (`taskGraph`, `fanOut`, …) are ignored — the graph stays
   in n8n.
 
@@ -137,6 +144,7 @@ Content-Type: application/json
 | `POST` | `/fleet/{id}/scale` | `{"replicas": N}` | `200` fleet status |
 | `POST` | `/fleet/{id}/stop` | `{}` | `200` fleet status |
 | `POST` | `/fleet/{id}/delegate` | `{instruction, nodeId, agentId, tools, kind}` | `200` `{status, output, error, nodeId, agentId}` |
+| `POST` | `/fleet/{id}/kill` | `{"enabled": true}` | `200` fleet status |
 
 Delegate also accepts snake_case (`node_id`, `agent_id`). Instruction max
 10000 characters. Overlapping POSTs increment an inflight counter; a
@@ -177,8 +185,9 @@ hermes fleet status hermes-clawhub-combined
 hermes fleet delegate hermes-clawhub-combined --instruction "search yaml skills"
 hermes fleet scale hermes-clawhub-combined --replicas 1
 hermes fleet stop hermes-clawhub-combined
+hermes fleet kill hermes-clawhub-combined        # --off to clear
 hermes fleet list    # alias: ls
-hermes fleet serve --port 8755
+hermes fleet serve --port 8755   # host/port default from config.yaml fleet.http
 ```
 
 ## n8n

@@ -68,7 +68,8 @@ delegation still uses `delegate_task`; n8n uses `fleet-delegate`.
 | Scale | `hermes fleet scale ID --replicas N` | `POST /fleet/{id}/scale` |
 | Stop | `hermes fleet stop ID` | `POST /fleet/{id}/stop` |
 | Delegate | `hermes fleet delegate ID --instruction …` | `POST /fleet/{id}/delegate` |
-| Serve | `hermes fleet serve` | binds `127.0.0.1:8755` |
+| Kill | `hermes fleet kill ID` (`--off` to clear) | `POST /fleet/{id}/kill` |
+| Serve | `hermes fleet serve` | binds `config.yaml` `fleet.http` (default `127.0.0.1:8755`) |
 
 Auth header: `Authorization: Bearer $FLEET_HTTP_TOKEN`. Token file:
 `$HERMES_HOME/fleets/.http_token`. Health:
@@ -93,8 +94,11 @@ Sample members: `orchestrator`, `clawhub-skill-runner`,
 ## Pitfalls
 
 - Non-loopback callback URLs and binds are refused in v1.
-- `POST /fleet/start` on an already-running `fleet_id` returns 409.
-- Scale-up is refused while `kill_switch` is true; stop still works.
+- `POST /fleet/start` on an already-running `fleet_id` returns 409
+  (status `running`, even with zero live workers). Stop first.
+- Scale-up and delegate are refused while `kill_switch` is true; arm it
+  with `hermes fleet kill <id>` or `POST /fleet/{id}/kill`. Stop still works.
+- Loopback clients ignore `HTTP_PROXY` so the bearer token stays on-box.
 - HTTP callers have no parent agent turn, so workers are idle **session
   slots** until `POST /fleet/{id}/delegate`. Cursor cloud ids are
   recorded, not executed.
@@ -108,3 +112,4 @@ Sample members: `orchestrator`, `clawhub-skill-runner`,
   5 (hard ceiling).
 - Same-turn install+run delegate returns `install_run_same_turn`.
 - `hermes fleet stop <id>` leaves `status: stopped` and zero live workers.
+- `hermes fleet kill <id>` then scale-up returns `kill_switch`.

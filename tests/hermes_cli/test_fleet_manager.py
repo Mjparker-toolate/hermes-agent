@@ -166,6 +166,49 @@ def test_second_start_while_live_is_already_running(tmp_path, monkeypatch):
     assert restarted["live_workers"] == 1
 
 
+def test_already_running_uses_fleet_status_not_the_live_set(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    mgr = _manager()
+    mgr.start(_start_doc(replicas=0))
+    assert mgr.get("alpha")["status"] == "running"
+    assert mgr.get("alpha")["live_workers"] == 0
+    with pytest.raises(FleetError) as exc:
+        mgr.start(_start_doc(replicas=1))
+    assert exc.value.code == "already_running"
+    assert exc.value.status == 409
+
+
+def test_concurrent_starts_cannot_both_create_replicas(tmp_path, monkeypatch):
+    """Per-fleet file lock: two managers starting together yield one winner."""
+    import threading
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    barrier = threading.Barrier(2)
+    outcomes: list[str] = []
+
+    def _race() -> None:
+        mgr = _manager()
+        try:
+            barrier.wait(timeout=5)
+            mgr.start(_start_doc(replicas=2, max_concurrency=3))
+            outcomes.append("ok")
+        except FleetError as exc:
+            outcomes.append(exc.code)
+
+    threads = [threading.Thread(target=_race) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert outcomes.count("ok") == 1
+    assert "already_running" in outcomes
+    record = load_fleet("alpha")
+    assert record is not None
+    assert record["status"] == "running"
+    assert len(record["workers"]) == 2
+
+
 def test_retry_backoff_then_terminal_failure(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     clock = _Clock()

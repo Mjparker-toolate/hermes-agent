@@ -29,7 +29,7 @@ from hermes_cli.fleet_schema import (
     parse_delegate_request,
     tool_kind,
 )
-from hermes_cli.fleet_store import list_fleet_ids, load_fleet, save_fleet
+from hermes_cli.fleet_store import fleet_lock, list_fleet_ids, load_fleet, save_fleet
 
 CallbackFn = Callable[[dict[str, Any]], None]
 
@@ -173,6 +173,9 @@ class SubagentSpawner:
         )
         tools = template.get("tools") or None
         allowed = tuple(tools) if tools else None
+        worker_id = str(worker.get("worker_id") or "")
+        attempts = int(worker.get("attempts") or 0)
+        correlation = f"{worker_id}-a{attempts}" if worker_id else None
         try:
             service = SubagentLifecycleService(get_active_subagent_parent)
             handle = service.launch(SubagentLaunchRequest(
@@ -180,7 +183,7 @@ class SubagentSpawner:
                 role=str(template.get("role") or "leaf"),
                 model=str(template.get("model") or "") or None,
                 allowed_toolsets=allowed,
-                correlation_id=str(worker.get("worker_id") or ""),
+                correlation_id=correlation,
                 metadata={"fleet_id": worker.get("fleet_id"), "worker_id": worker.get("worker_id")},
             ))
         except SubagentLifecycleError:
@@ -224,11 +227,11 @@ class FleetManager:
     def start(self, document: Mapping[str, Any]) -> dict[str, Any]:
         config = normalize_fleet_config(document)
         fleet_id = config["fleet_id"]
-        with self._lock:
+        with self._lock, fleet_lock(fleet_id):
             existing = load_fleet(fleet_id)
-            if existing and _live_workers(existing):
+            if existing and existing.get("status") == "running":
                 raise FleetError(
-                    f"Fleet {fleet_id!r} is already running.",
+                    f"Fleet {fleet_id!r} is already running; stop it first.",
                     code="already_running",
                     status=409,
                 )
@@ -248,7 +251,7 @@ class FleetManager:
             return self._public(record)
 
     def get(self, fleet_id: str) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, fleet_lock(fleet_id):
             record = self._require(fleet_id)
             self._reconcile_locked(record)
             self._persist(record, event=None)
@@ -258,7 +261,8 @@ class FleetManager:
         with self._lock:
             summaries = []
             for fleet_id in list_fleet_ids():
-                record = load_fleet(fleet_id)
+                with fleet_lock(fleet_id):
+                    record = load_fleet(fleet_id)
                 if record:
                     summaries.append(self._public(record))
             return summaries
@@ -266,7 +270,7 @@ class FleetManager:
     def scale(self, fleet_id: str, *, replicas: int) -> dict[str, Any]:
         if isinstance(replicas, bool) or not isinstance(replicas, int) or replicas < 0:
             raise FleetError("replicas must be an integer >= 0.", code="invalid_config")
-        with self._lock:
+        with self._lock, fleet_lock(fleet_id):
             record = self._require(fleet_id)
             config = record["config"]
             if replicas > int(config["max_concurrency"]):
@@ -282,7 +286,7 @@ class FleetManager:
             return self._public(record)
 
     def stop(self, fleet_id: str, *, drain: bool = True) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, fleet_lock(fleet_id):
             record = self._require(fleet_id)
             self._scale_locked(record, 0, drain=drain)
             record["status"] = "stopped"
@@ -300,7 +304,7 @@ class FleetManager:
                 raise FleetError(str(exc), code="install_run_same_turn", status=409) from exc
             raise
         tools = list(parsed["tools"])
-        with self._lock:
+        with self._lock, fleet_lock(fleet_id):
             record = self._require(fleet_id)
             if record.get("status") != "running":
                 raise FleetError(
@@ -344,7 +348,7 @@ class FleetManager:
                 "kind": parsed["kind"],
             }
         finally:
-            with self._lock:
+            with self._lock, fleet_lock(fleet_id):
                 record = self._require(fleet_id)
                 record["inflight"] = max(0, int(record.get("inflight") or 0) - 1)
                 if worker_snapshot.get("worker_id"):
@@ -356,7 +360,7 @@ class FleetManager:
         return result
 
     def set_kill_switch(self, fleet_id: str, enabled: bool) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, fleet_lock(fleet_id):
             record = self._require(fleet_id)
             record["config"]["kill_switch"] = bool(enabled)
             self._persist(record, event="kill_switch")
@@ -364,7 +368,7 @@ class FleetManager:
 
     def mark_worker_failed(self, fleet_id: str, worker_id: str, *, reason: str = "worker_failed") -> dict[str, Any]:
         """Test/ops hook: apply retry/backoff to a live worker."""
-        with self._lock:
+        with self._lock, fleet_lock(fleet_id):
             record = self._require(fleet_id)
             worker = self._find_worker(record, worker_id)
             if worker is None:

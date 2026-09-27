@@ -47,6 +47,7 @@ def test_skill_points_agents_at_native_tools_and_the_http_surface():
         "POST /fleet/{id}/scale",
         "POST /fleet/{id}/stop",
         "POST /fleet/{id}/delegate",
+        "POST /fleet/{id}/kill",
     ):
         assert route in text
     assert "127.0.0.1" in text
@@ -95,6 +96,83 @@ def test_client_prefers_hermes_home_over_hardcoded_dot_hermes(tmp_path, monkeypa
     client = _load_client()
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     assert client._hermes_home() == tmp_path
+
+
+def test_client_loads_token_from_profile_dotenv(tmp_path, monkeypatch):
+    client = _load_client()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.delenv("FLEET_HTTP_TOKEN", raising=False)
+    (tmp_path / ".env").write_text("FLEET_HTTP_TOKEN=from-dotenv-token\n", encoding="utf-8")
+    assert client._token() == "from-dotenv-token"
+
+
+def test_client_ignores_http_proxy_when_calling_loopback(tmp_path, monkeypatch, capsys):
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from threading import Thread
+
+    from hermes_cli.fleet_http import start_background_server
+    from hermes_cli.fleet_manager import FleetManager, MemorySessionBackend
+
+    class _Noop:
+        def launch(self, worker, template):
+            return None
+
+        def cancel(self, handle_dict) -> None:
+            return None
+
+    class Proxy(BaseHTTPRequestHandler):
+        hits: list[str] = []
+
+        def log_message(self, fmt, *args):
+            return
+
+        def do_GET(self):  # noqa: N802
+            Proxy.hits.append(self.path)
+            self.send_response(502)
+            self.end_headers()
+
+        def do_POST(self):  # noqa: N802
+            Proxy.hits.append(self.path)
+            self.send_response(502)
+            self.end_headers()
+
+        def do_CONNECT(self):  # noqa: N802
+            Proxy.hits.append(self.path)
+            self.send_response(502)
+            self.end_headers()
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    token = "proxy-client-token"
+    monkeypatch.setenv("FLEET_HTTP_TOKEN", token)
+    Proxy.hits = []
+    proxy = HTTPServer(("127.0.0.1", 0), Proxy)
+    proxy_thread = Thread(target=proxy.serve_forever, daemon=True)
+    proxy_thread.start()
+    manager = FleetManager(sessions=MemorySessionBackend(), spawner=_Noop())
+    server, thread, base, _resolved = start_background_server(
+        host="127.0.0.1", port=0, manager=manager, token=token,
+    )
+    client = _load_client()
+    try:
+        _proxy_host, proxy_port = proxy.server_address[:2]
+        monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{proxy_port}")
+        monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{proxy_port}")
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        rc = client.main([
+            "--base-url", base, "start", "--config", str(EXAMPLE),
+        ])
+        assert rc == 0
+        started = json.loads(capsys.readouterr().out)
+        assert started["fleet_id"] == "local-dev"
+        assert Proxy.hits == []
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        proxy.shutdown()
+        proxy_thread.join(timeout=5)
+        proxy.server_close()
 
 
 def test_client_http_lifecycle_against_loopback_server(tmp_path, monkeypatch, capsys):

@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 DEFAULT_BASE = "http://127.0.0.1:8755"
 DEFAULT_FLEET_ID = "hermes-clawhub-combined"
@@ -23,7 +23,25 @@ def _hermes_home() -> Path:
     return Path.home() / ".hermes"
 
 
+def _load_profile_env() -> None:
+    try:
+        from hermes_cli.env_loader import load_hermes_dotenv
+        load_hermes_dotenv(hermes_home=_hermes_home(), load_external_secrets=False)
+        return
+    except ImportError:
+        pass
+    path = _hermes_home() / ".env"
+    if not path.is_file():
+        return
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(dotenv_path=path, override=False)
+    except ImportError:
+        return
+
+
 def _token() -> str:
+    _load_profile_env()
     env = (os.environ.get("FLEET_HTTP_TOKEN") or "").strip()
     if env:
         return env
@@ -31,6 +49,10 @@ def _token() -> str:
     if path.is_file():
         return path.read_text(encoding="utf-8").strip()
     return ""
+
+
+def _urlopen_no_proxy(request: Request, timeout: float):
+    return build_opener(ProxyHandler({})).open(request, timeout=timeout)
 
 
 def _tools() -> list[str]:
@@ -77,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         },
     )
     try:
-        with urlopen(request, timeout=15) as response:
+        with _urlopen_no_proxy(request, timeout=15) as response:
             raw = response.read().decode("utf-8")
             parsed = json.loads(raw) if raw else {}
             status_code = response.status

@@ -89,3 +89,36 @@ def test_missing_config_is_a_usage_error(capsys):
     assert rc == 2
     err = capsys.readouterr().err
     assert "error:" in err
+
+
+def test_non_loopback_serve_is_a_concise_error_not_a_traceback(capsys):
+    rc = fleet_command(Namespace(fleet_action="serve", host="0.0.0.0", port=0))
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "error:" in err
+    assert "loopback" in err.lower()
+    assert "Traceback" not in err
+
+
+def test_kill_cli_arms_and_clears(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    mgr = FleetManager(sessions=MemorySessionBackend(), spawner=_NoopSpawner())
+    monkeypatch.setattr("hermes_cli.fleet._manager", lambda: mgr)
+
+    fleet_command(Namespace(
+        fleet_action="start",
+        config=None,
+        json='{"fleet_id": "cli-kill", "replicas": 1}',
+        replicas=None,
+    ))
+    capsys.readouterr()
+
+    rc = fleet_command(Namespace(fleet_action="kill", fleet_id="cli-kill", off=False))
+    assert rc == 0
+    armed = json.loads(capsys.readouterr().out)
+    assert armed["kill_switch"] is True
+
+    rc = fleet_command(Namespace(fleet_action="kill", fleet_id="cli-kill", off=True))
+    assert rc == 0
+    cleared = json.loads(capsys.readouterr().out)
+    assert cleared["kill_switch"] is False
